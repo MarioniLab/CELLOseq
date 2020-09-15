@@ -1,0 +1,274 @@
+---
+title: CELLO-Seq Sarlacc pipeline - internal adaptor quality control
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base.
+
+The first step in the pipeline is to perform quality control analysis of the adaptor to determine if the full adaptor sequences are present within the read and the percentage of reads containing internal adaptor. If the percentage of reads containing internal adaptor > 20%, we recommend running porechop to split reads with internal adaptor.
+
+# Setting up sequence data
+
+First, we define the adaptor sequence for quality control analysis.
+Note that this script is designed to analyse each adaptor separately, so this script needs to be run twice (ideally in parallel to reduce runtime).
+
+```{r}
+adaptor.type = "dt"
+adaptor <- "GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGNNNNNNNNNNNNNNNNNNNNNNNNAGTGGTATCNRYNRYNRYNRYNRYNRYNRYNACTGGCCGTCGTTTTACATGGCGTAGCGGGTTCGAGCGCACCGCAGGGTATCCGGCTATTTTTTTTTTTTTTT" # dT oligo
+# adaptor <- "ACACTCTTTCCTCGTCGGCAGCGTCAGATGTGTATAAGAGAC" # TSO
+```
+
+# Quality control of reads
+
+We will now perform quality control of the reads itself.
+
+```{r}
+library(Biostrings)
+(reads <- readQualityScaledDNAStringSet(paste0(INDEX))
+```
+
+We will look at the number of reads:
+
+```{r}
+(total <- length(reads))
+```
+
+and the distribution of the read lengths:
+
+```{r}
+reads.len <- width(reads)
+hist(reads.len, breaks=100, xlab="Read length (bp)", col="grey80")
+```
+
+# Alignment of adaptor
+
+For the sake of speed, we will only consider a random subset of 10000 reads.
+
+```{r}
+set.seed(100)
+N <- sample(length(reads), min(length(reads), 10000))
+reads <- reads[N]
+```
+
+We need to pre-process the adaptor sequence to avoid issues with `N`s. This is because `Biostrings` pairwise alignment machinery uses quality scores, for which `N`s need to have low scores.
+
+```{r}
+not.N <- strsplit(adap.seq, "")[[1]]!="N"
+adap.scores <- PhredQuality(not.N*21L)
+(adap <- QualityScaledDNAStringSet(adap.seq, adap.scores))
+```
+
+We also create a reverse-complemented (RC) adaptor sequence, for alignment to the other strand of the reported read sequence.
+
+```{r}
+(rc.adap <- reverseComplement(adap))
+```
+
+We then set up a wrapper function to obtain alignments and extract the necessary information.
+
+```{r, echo=FALSE}
+library(S4Vectors)
+alnFun <- function(reads, y) {
+    aln <- pairwiseAlignment(reads, subject=y, type="local-global", gapOpening=5, gapExtension=1)
+    DataFrame(start=start(pattern(aln)), end=end(pattern(aln)), score=score(aln))
+}
+```
+
+We then perform the alignment of adaptor against the reads:
+
+```{r}
+(aln.f.reads <- alnFun(reads, adap))
+```
+
+as well as the reverse complement of the adaptor:
+
+```{r}
+(aln.rc.reads <- alnFun(reads, rc.adap))
+```
+
+For comparison, we shuffle the read sequences the read sequences and repeat the alignments.
+
+```{r}
+shuffled <- sarlacc:::.scramble_input(reads, TRUE)
+(aln.f.rand <- alnFun(shuffled, adap))
+(aln.rc.rand <- alnFun(shuffled, rc.adap))
+```
+
+# Defining adaptor alignment score threshold
+
+We will now define the score threshold used for determining successful alignment of adaptor based on the false discovery rate.
+
+```{r}
+reads.score <- c(aln.f.reads$score, aln.rc.reads$score)
+rand.score <- c(aln.f.rand$score, aln.rc.rand$score)
+score <- sort(reads.score)
+scram.score <- sort(rand.score)
+fdr <- (length(scram.score) - findInterval(score, scram.score))/(length(score) - seq_along(score))
+ix <- min(which(fdr <= 1e-3))
+threshold = max(0,score[ix])
+```
+
+## Defining plotting wrappers
+
+We set up function wrappers to generate commonly used plots. The function `compare_SmoothScatter` creates a pair of smoothed scatter plots with coordinated axis ranges, while `compare_hist` will create histograms with the same x-axis limits.
+
+```{r, echo=FALSE}
+compare_SmoothScatter <- function(dat1_x,dat1_y,dat2_x,dat2_y, vline=NULL, hline=NULL, title=NULL, ...) {
+    xlim <- range(c(range(dat1_x), range(dat2_x)))
+    ylim <- range(c(range(dat1_y), range(dat2_y)))
+
+    par(mfrow=c(1,2))
+    smoothScatter(dat1_x, dat1_y, ylim=ylim, xlim=xlim, main=title[1], ...)
+    if(!is.null(vline)){
+        abline(v=vline, col = "red")
+    }
+    if(!is.null(hline)){
+        abline(h=hline, col = "red")
+    }
+
+    smoothScatter(dat2_x, dat2_y, ylim=ylim, xlim=xlim, main=title[2], ...)
+    if(!is.null(vline)){
+        abline(v=vline, col = "red")
+    }
+    if(!is.null(hline)){
+        abline(h=hline, col = "red")
+    }
+}
+
+compare_hist <- function(dat1, dat2, title, breaks=50, vline=NULL,...){
+    xlim <- range(c(range(dat1), range(dat2)))
+    breaks_seq <- seq(xlim[1], xlim[2], length.out=breaks)
+
+    dat1_hist <- hist(dat1,plot=F,breaks=breaks_seq)
+    dat2_hist <- hist(dat2,plot=F,breaks=breaks_seq)
+    ylim <- range(c(dat1_hist$counts,dat2_hist$counts))
+
+    par(mfrow=c(1,2))
+    hist(dat1, col="grey80", ylim=ylim, main=title[1], breaks=breaks_seq,...)
+    box()
+    if(!is.null(vline)){
+        abline(v=vline, col = "red")
+    }
+
+    hist(dat2, col="grey80", ylim=ylim, main=title[2],breaks=breaks_seq,...)
+    box()
+    if(!is.null(vline)){
+        abline(v=vline, col = "red")
+    }
+}
+```
+
+## Distribution of alignment scores
+
+We plot the alignment scores for the forward strand adaptor against the read sequences. The alignment scores for the reads should be significantly higher than the alignment scores for the random control:
+
+```{r}
+compare_hist(aln.f.reads$score,
+             aln.f.rand$score,
+             c("Real", "Scramble"),
+             xlab="Alignment score",
+             vline=threshold)
+```
+
+and similarly for the reverse complement:
+
+```{r}
+compare_hist(aln.rc.reads$score,
+             aln.rc.rand$score,
+             c("Real", "Scramble"),
+             xlab="Alignment score",
+             vline=threshold)
+```
+
+It is often the case that a substantial number of reads in both of the above plots will have alignment scores similar to random.
+This is due to the fact that reads on the forward strand of the cDNA will contain the forward adaptor sequence, while reads on the reverse strand will contain the RC sequence.
+This is demonstrated with the plot below, where reads with high scores for the forward alignment should have low scores for the RC alignment.
+
+```{r}
+compare_SmoothScatter(dat1_x = aln.f.reads$score,
+                      dat1_y = aln.rc.reads$score,
+                      dat2_x = aln.f.rand$score,
+                      dat2_y = aln.rc.rand$score,
+                      hline = threshold,
+                      vline = threshold,
+                      xlab="Alignment Score",
+                      ylab="Alignment Score",
+                      title=c("Real", "Scramble"))
+```
+
+We calculate the proportion of reads that do not have the full adaptor sequence on either the forward or reverse strand:
+
+```{r}
+(without.adap <- mean(pmax(aln.f.reads$score, aln.rc.reads$score) <= threshold))
+```
+
+# Alignment score against position
+
+It is also helpful to know the position of the alignment of the adaptor sequence.
+Ideally, well-aligned adaptors should occur at the ends of the reads.
+The forward full oligo-dT alignments should exhibit high scores at the start of the read:
+
+```{r}
+compare_SmoothScatter(dat1_x = aln.f.reads$start/width(reads),
+                      dat1_y = aln.f.reads$score,
+                      dat2_x = aln.f.rand$start/width(shuffled),
+                      dat2_y = aln.f.rand$score,
+                      hline = threshold,
+                      xlab="Relative start site",
+                      ylab="Alignment Score",
+                      title=c("Genuine", "Control"))
+```
+,
+while the RC full oligo-dT should align best to the end of the read:
+
+```{r}
+compare_SmoothScatter(dat1_x = aln.rc.reads$start/width(reads),
+                      dat1_y = aln.rc.reads$score,
+                      dat2_x = aln.rc.rand$start/width(shuffled),
+                      dat2_y = aln.rc.rand$score,
+                      hline = threshold,
+                      xlab = "Relative start site",
+                      ylab = "Alignment Score",
+                      title = c("Genuine", "Control"))
+```
+
+We calculate the percentage of reads with adaptor in the middle (defined as within 20%-80% of read length):
+
+```{r}
+(middle.perc <- sum(aln.f.reads$start/width(reads) > 0.2 & aln.f.reads$score > threshold)/length(aln.f.reads$start/width(reads)))
+```
+
+... and for reverse complement:
+
+```{r}
+(middle.perc.rc <- sum(aln.rc.reads$start/width(reads) < 0.8 & aln.rc.reads$score > threshold)/length(aln.rc.reads$start/width(reads)))
+```
+
+# Output
+
+We save the statistics generated from this report into rds for the meta QC reports.
+
+```{r}
+saveRDS(list(reads.len = reads.len,
+             adap.info = c(with.adap = 1-without.adap),
+             middle.adap.info = c(f = middle.perc, rc = middle.perc.rc)),
+        file=paste0("adaptor_", adaptor.type, "_stat.rds"))
+saveRDS(threshold, file = paste0("adaptor_", adaptor.type, "_threshold.rds"))
+```
+

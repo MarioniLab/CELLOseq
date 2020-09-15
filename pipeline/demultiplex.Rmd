@@ -1,0 +1,171 @@
+---
+title: CELLO-Seq Sarlacc pipeline - sample demultiplex
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output: 
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base. 
+
+After the initial quality control, we perform demultiplexing of reads using the sample barcodes.
+
+# Setting up sequence data
+
+First, we define CELLO-seq adaptor sequences that should be present on each end of the read sequences.
+
+Here, adaptor 1 represent the splint oligo containing the sample barcode (represented by a strech of `N`s) and the UMI (represented by a stretch of `NRY`s).
+We also have adaptor 2, which is the TSO adapter.
+
+```{r}
+adaptor1 <- "GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGNNNNNNNNNNNNNNNNNNNNNNNNAGTGGTATCNRYNRYNRYNRYNRYNRYNRYNACTGGCCGTCGTTTTACATGGCGTAGCGGGTTCGAGCGCACCGCAGGGTATCCGGCTATTTTTTTTTTTTTTT"
+adaptor2 <- "ACACTCTTTCCTCGTCGGCAGCGTCAGATGTGTATAAGAGAC"
+```
+
+We then define the barcode sequences that could be present in the first stretch of `N`s in `adaptor1`. 
+
+Here, we have included the 96 barcode sequences from ONT, though it is recommended that you include only the barcode used in the experiment.
+
+```{r}
+all.barcodes <- c("AAGAAAGTTGTCGGTGTCTTTGTG", "TCGATTCCGTTTGTAGTCGTCTGT", "GAGTCTTGTGTCCCAGTTACCAGG", "TTCGGATTCTATCGTGTTTCCCTA", "CTTGTCCAGGGTTTGTGTAACCTT", "TTCTCGCAAAGGCAGAAAGTAGTC", "GTGTTACCGTGGGAATGAATCCTT", "TTCAGGGAACAAACCAAGTTACGT", "AACTAGGCACAGCGAGTCTTGGTT", "AAGCGTTGAAACCTTTGTCCTCTC", "GTTTCATCTATCGGAGGGAATGGA", "CAGGTAGAAAGAAGCAGAATCGGA", "AGAACGACTTCCATACTCGTGTGA", "AACGAGTCTCTTGGGACCCATAGA", "AGGTCTACCTCGCTAACACCACTG", "CGTCAACTGACAGTGGTTCGTACT", "ACCCTCCAGGAAAGTACCTCTGAT", "CCAAACCCAACAACCTAGATAGGC", "GTTCCTCGTGCAGTGTCAAGAGAT", "TTGCGTCCTGTTACGAGAACTCAT", "GAGCCTCTCATTGTCCGTTCTCTA", "ACCACTGCCATGTATCAAAGTACG", "CTTACTACCCAGTGAACCTCCTCG", "GCATAGTTCTGCATGATGGGTTAG", "GTAAGTTGGGTATGCAACGCAATG", "CATACAGCGACTACGCATTCTCAT", "CGACGGTTAGATTCACCTCTTACA", "TGAAACCTAAGAAGGCACCGTATC", "CTAGACACCTTGGGTTGACAGACC", "TCAGTGAGGATCTACTTCGACCCA", "TGCGTACAGCAATCAGTTACATTG", "CCAGTAGAAGTCCGACAACGTCAT", "CAGACTTGGTACGGTTGGGTAACT", "GGACGAAGAACTCAAGTCAAAGGC", "CTACTTACGAAGCTGAGGGACTGC", "ATGTCCCAGTTAGAGGAGGAAACA", "GCTTGCGATTGATGCTTAGTATCA", "ACCACAGGAGGACGATACAGAGAA", "CCACAGTGTCAACTAGAGCCTCTC", "TAGTTTGGATGACCAAGGATAGCC", "GGAGTTCGTCCAGAGAAGTACACG", "CTACGTGTAAGGCATACCTGCCAG", "CTTTCGTTGTTGACTCGACGGTAG", "AGTAGAAAGGGTTCCTTCCCACTC", "GATCCAACAGAGATGCCTTCAGTG", "GCTGTGTTCCACTTCATTCTCCTG", "GTGCAACTTTCCCACAGGTAGTTC", "CATCTGGAACGTGGTACACCTGTA", "ACTGGTGCAGCTTTGAACATCTAG", "ATGGACTTTGGTAACTTCCTGCGT", "GTTGAATGAGCCTACTGGGTCCTC", "TGAGAGACAAGATTGTTCGTGGAC", "AGATTCAGACCGTCTCATGCAAAG", "CAAGAGCTTTGACTAAGGAGCATG", "TGGAAGATGAGACCCTGATCTACG", "TCACTACTCAACAGGTGGCATGAA", "GCTAGGTCAATCTCCTTCGGAAGT", "CAGGTTACTCCTCCGTGAGTCTGA", "TCAATCAAGAAGGGAAAGCAAGGT", "CATGTTCAACCAAGGCTTCTATGG", "AGAGGGTACTATGTGCCTCAGCAC", "CACCCACACTTACTTCAGGACGTA", "TTCTGAAGTTCCTGGGTCTTGAAC", "GACAGACACCGTTCATCGACTTTC", "TTCTCAGTCTTCCTCCAGACAAGG", "CCGATCCTTGTGGCTTCTAACTTC", "GTTTGTCATACTCGTGTGCTCACC", "GAATCTAAGCAAACACGAAGGTGG", "TACAGTCCGAGCCTCATGTGATCT", "ACCGAGATCCTACGAATGGAGTGT", "CCTGGGAGCATCAGGTAGTAACAG", "TAGCTGACTGTCTTCCATACCGAC", "AAGAAACAGGATGACAGAACCCTC", "TACAAGCATCCCAACACTTCCACT", "GACCATTGTGATGAACCCTGTTGT", "ATGCTTGTTACATCAACCCTGGAC", "CGACCTGTTTCTCAGGGATACAAC", "AACAACCGAACCTTTGAATCAGAA", "TCTCGGAGATAGTTCTCACTGCTG", "CGGATGAACATAGGATAGCGATTC", "CCTCATCTTGTGAAGTTGTTTCGG", "ACGGTATGTCGAGTTCCAGGACTA", "TGGCTTGATCTAGGTAAGGTCGAA", "GTAGTGGACCTAGAACCTGTGCCA", "AACGGAGGAGTTAGTTGGATGATC", "AGGTGATCCCAACAAGCGTAAGTA", "TACATGCTCCTGTTGTTAGGGAGG", "TCTTCTACTACCGATCCGAAGCAG", "ACAGCATCAATGTTTGGCTAGTTG", "GATGTAGAGGGTACGGTTTGAGGC", "GGCTCCATAGGAACTCACGCTACT", "TTGTGAGTGGAAAGATACAGGACC", "AGTTTCCATCACTTCAGACTTGGG", "GATTGTCCTCAAACTGCCACCTAC", "CCTGTCTGGAAGAAGAATGGACTT", "CTGAACGGTCATAGAGTCCACCAT")
+```
+
+# Alignment of adaptor
+
+We now align the adaptor sequences to all of the reads using sarlacc's `adaptorAlign` function^[We are using fixed parameters for gapOpening and gapExtension chosen from one run of the `tuning.Rmd` file. We could also supply the tuned parameters directly but will not do so for simplicity.].
+
+By default, the alignment will only consider the 250 bp on either end of the read to reduce the runtime, under the assumption that the adaptors should occur at the read ends. 
+This can be further sped up by parallelising jobs using the `BiocParallel` package with the appropriate backend supplied to the optional `BPPARAM=` argument.
+
+```{r}
+aln.out <- adaptorAlign(adaptor1, adaptor2, filepath="<path to fastq>", gapOpening=4, gapExtension=1)
+colnames(aln.out)
+```
+
+The output is a `DataFrame` that contains alignment information for each adaptor. For example, the `adaptor1` field contains a nested `DataFrame` with alignment scores and positions for `adaptor1` on the read:
+
+```{r}
+aln.out$adaptor1
+```
+
+Note that the positions here refer to coordinates on a "canonical orientation" of the read where the adaptor 1 occurs at the 5' end. 
+Reads are marked as being reverse-complemented (if necessary) to match this canonical orientation, to ensure that adaptor 1 and 2 are located on the 5' and 3' ends respectively. 
+
+Whether or not a read sequence was reverse-complemented is indicated by the `aln.out$reversed` field:
+
+```{r}
+summary(aln.out$reversed)
+```
+
+# Filtering for adaptor-containing reads
+
+We now use sarlacc's `getAdaptorThresholds` function to choose an appropriate score threshold for the presence of an adaptor. 
+This involves scrambling the start and end sequences, and repeating the alignment, with the aim of choosing a threshold that distinguishes between the real and scrambled scores.
+
+To expedite this process, we only perform this for a random set of 10000 reads.
+
+```{r}
+N <- min(10000, nrow(aln.out))
+subset <- aln.out[sample(nrow(aln.out), N),]
+thresh <- getAdaptorThresholds(subset)
+thresh$threshold1
+thresh$threshold2
+```
+
+We verify that the thresholds are suitable for adaptor 1:
+
+```{r, fig.cap="Distribution of adaptor 1 alignment scores for the real reads (blue) and scrambled sequences (red)."}
+real.dist <- density(thresh$scores1$reads)
+scrambled.dist <- density(thresh$scores1$scrambled)
+plot(real.dist, xlim=range(real.dist$x, scrambled.dist$x),
+    ylim=range(real.dist$y, scrambled.dist$y), col="blue")
+lines(scrambled.dist, col="red")
+abline(v=thresh$threshold1, col="grey", lty=2)
+```
+
+... and for adaptor 2:
+
+```{r, fig.cap="Distribution of adaptor 2 alignment scores for the real reads (blue) and scrambled sequences (red)."}
+real.dist <- density(thresh$scores2$reads)
+scrambled.dist <- density(thresh$scores2$scrambled)
+plot(real.dist, xlim=range(real.dist$x, scrambled.dist$x),
+    ylim=range(real.dist$y, scrambled.dist$y), col="blue")
+lines(scrambled.dist, col="red")
+abline(v=thresh$threshold2, col="grey", lty=2)
+```
+
+Based on these thresholds, we retain only those reads that have well-aligned adaptors on both sides^[We'll round the thresholds to fixed values, for simplicity and to simplify reproducibility.].
+
+```{r}
+filtered <- filterReads(aln.out, thresh$threshold1, thresh$threshold2)
+nrow(filtered)
+```
+
+# Demultiplexing reads
+
+We assign reads back to the sample of origin by aligning the barcode in the adaptor against the list of reference barcode.
+
+As with `adaptorAlign`, this can be further sped up by parallelising jobs using the `BiocParallel` package with the appropriate backend supplied to the optional `BPPARAM=` argument.
+
+```{r}
+debarcoded <- barcodeAlign(filtered$adaptor1$subseq$Sub1, all.barcodes, gapOpening=4, gapExtension=1, BPPARAM=BPPARAM)
+debarcoded
+```
+
+The function returns the read sequence at the barcode location, the assigned barcode, its alignment score and the gap to the score of the next-best aligned barcode.
+An unambiguous assignment to a single barcode should manifest as a high score and a large gap.
+
+We define a suitable threshold for both of these metrics with `getBarcodeThresholds`: 
+
+```{r}
+(barcode.thresh <- getBarcodeThresholds(debarcoded))
+```
+
+We then filter the reads to only retain those that were unambiguously assigned to a barcode:
+
+```{r}
+was.assigned <- debarcoded$score > barcode.thresh["score"] &
+    debarcoded$gap > barcode.thresh["gap"]
+table(debarcoded$barcode, was.assigned)
+```
+
+... and split them into their samples of origin:
+
+```{r}
+by.sample <- split(filtered[was.assigned,], debarcoded$barcode[was.assigned])
+names(by.sample)
+```
+
+# Writing out demultiplexed reads
+
+We now output the demultiplexed reads by sample as a FASTQ file for the alignment step and an rds file containing the adaptor alignment information for use in grouping and error correction/deduplication.
+
+```{r}
+for (i in names(by.sample)) {
+  my.sample <- by.sample[[i]]
+  fastq.sample <- realizeReads(my.sample)
+  outfile <- paste0("barcode_", i, ".fastq")
+  writeXStringSet(fastq.sample, outfile, format = "fastq", qualities=quality(fastq.sample))
+  saveRDS(my.sample, file = paste0("barcode_", i, ".fastq.rds"))
+}
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+

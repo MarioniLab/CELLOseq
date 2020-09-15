@@ -1,0 +1,114 @@
+---
+title: CELLO-Seq Sarlacc pipeline - internal adaptor filtering
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base.
+
+The internal adaptor filtering step is a recommended optional step to identify reads containing internal adaptor for removal in downstream analysis.
+This step is similar to the internal adaptor QC step, but is designed to run on all reads and therefore is run after demultiplex step to reduce the runtime through parallelisation of the step.
+
+# Setting up sequence data
+
+First, we define the adaptor sequence for quality control analysis.
+Note that this script is designed to analyse each adaptor separately, so this script needs to be run twice (ideally in parallel to reduce runtime).
+
+```{r}
+adaptor.type = "dt"
+adaptor <- "GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGNNNNNNNNNNNNNNNNNNNNNNNNAGTGGTATCNRYNRYNRYNRYNRYNRYNRYNACTGGCCGTCGTTTTACATGGCGTAGCGGGTTCGAGCGCACCGCAGGGTATCCGGCTATTTTTTTTTTTTTTT" # dT oligo
+# adaptor <- "ACACTCTTTCCTCGTCGGCAGCGTCAGATGTGTATAAGAGAC" # TSO
+```
+
+We also read in the demultiplexed reads for each sample.
+
+```{r}
+library(Biostrings)
+(reads <- readQualityScaledDNAStringSet("<path to fastq>"))
+```
+
+
+# Alignment of adaptor
+
+We need to pre-process the adaptor sequence to avoid issues with `N`s. This is because `Biostrings` pairwise alignment machinery uses quality scores, for which `N`s need to have low scores.
+
+```{r}
+not.N <- strsplit(adap.seq, "")[[1]]!="N"
+adap.scores <- PhredQuality(not.N*21L)
+(adap <- QualityScaledDNAStringSet(adap.seq, adap.scores))
+```
+
+We also create a reverse-complemented (RC) adaptor sequence, for alignment to the other strand of the reported read sequence.
+
+```{r}
+(rc.adap <- reverseComplement(adap))
+```
+
+We then set up a wrapper function to obtain alignments and extract the necessary information.
+
+```{r, echo=FALSE}
+library(S4Vectors)
+alnFun <- function(reads, y) {
+    aln <- pairwiseAlignment(reads, subject=y, type="local-global", gapOpening=5, gapExtension=1)
+    DataFrame(start=start(pattern(aln)), end=end(pattern(aln)), score=score(aln))
+}
+```
+
+We then perform the alignment of adaptor against the reads:
+
+```{r}
+(aln.f.reads <- alnFun(reads, adap))
+```
+
+as well as the reverse complement of the adaptor:
+
+```{r}
+(aln.rc.reads <- alnFun(reads, rc.adap))
+```
+
+# Filtering reads with middle adaptor
+
+We read in the adaptor alignment threshold calculated using a subset of the full reads.
+
+```{r}
+threshold <- readRDS(paste0("adaptor_", adaptor.type, "_threshold.rds"))
+```
+
+We calculate the percentage of reads with adaptor in the middle (defined as within 20%-80% of read length):
+
+```{r}
+(middle.perc <- sum(aln.f.reads$start/width(reads) > 0.2 & aln.f.reads$score > threshold)/length(aln.f.reads$start/width(reads)))
+```
+
+... and for reverse complement:
+
+```{r}
+(middle.perc.rc <- sum(aln.rc.reads$start/width(reads) < 0.8 & aln.rc.reads$score > threshold)/length(aln.rc.reads$start/width(reads)))
+```
+
+# Output
+
+We save the information of reads with middle adaptor for removal in downstream steps.
+
+```{r}
+middle.f.reads <- reads[aln.f.reads$start/width(reads) > 0.2 & aln.f.reads$score > threshold]
+middle.rc.reads <- reads[aln.rc.reads$start/width(reads) < 0.8 & aln.rc.reads$score > threshold]
+
+middle.reads <- union(middle.f.reads, middle.rc.reads)
+saveRDS(middle.reads, file = paste0(INDEX, "_adaptor_", adaptor.type, ".middle.rds"))
+```

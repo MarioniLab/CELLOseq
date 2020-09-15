@@ -1,0 +1,64 @@
+---
+title: CELLO-Seq Sarlacc pipeline - alignment tuning
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base.
+
+The tuning step is an optional step which is designed to give an intuition for the suitable alignment parameters for `adaptorAlign` and `barcodeAlign`.
+This step is time-consuming, but does not need to be routinely performed in every analysis.
+
+# Setting up sequence data
+
+First, we define CELLO-seq adaptor sequences that should be present on each end of the read sequences.
+
+Here, adaptor 1 represent the splint oligo containing the sample barcode (represented by a strech of `N`s) and the UMI (represented by a stretch of `NRY`s).
+We also have adaptor 2, which is the TSO adapter.
+
+```{r}
+adaptor1 <- "GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGNNNNNNNNNNNNNNNNNNNNNNNNAGTGGTATCNRYNRYNRYNRYNRYNRYNRYNACTGGCCGTCGTTTTACATGGCGTAGCGGGTTCGAGCGCACCGCAGGGTATCCGGCTATTTTTTTTTTTTTTT"
+adaptor2 <- "ACACTCTTTCCTCGTCGGCAGCGTCAGATGTGTATAAGAGAC"
+```
+
+# Identifying alignment parameters
+
+We determine suitable alignment parameters using the `tuneAlignment` function.
+This will identify the parameter combination that maximizes the separation between the real alignment scores and those for scrambled input sequences.
+
+```{r}
+tuning <- tuneAlignment(adaptor1, adaptor2, filepath="<path to fastq>")
+tuning$parameters
+```
+
+We confirm that these parameter choices are sensible by verifying the separation in the distribution of scores for the real alignments compared to the scrambled sequences.
+
+```{r, fig.cap="Distribution of adaptor alignment scores for the real reads (blue) and scrambled sequences (red) using the tuned alignment parameters. Scores for both adaptors in the optimal orientation are added together to give the combined score for each read."}
+real.dist <- density(tuning$scores$reads)
+scram.dist <- density(tuning$scores$scrambled)
+plot(real.dist, xlim=range(real.dist$x, scram.dist$x),
+    ylim=range(real.dist$y, scram.dist$y), col="blue")
+lines(scram.dist, col="red")
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+

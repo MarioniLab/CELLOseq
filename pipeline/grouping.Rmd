@@ -1,0 +1,121 @@
+---
+title: CELLO-Seq Sarlacc pipeline - UMI grouping
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base. 
+
+Following alignment of the reads against the transcriptome for pre-grouping of reads based on transcript/repeat, we will now perform UMI grouping by clustering similar UMI sequence together. 
+
+# Reading files
+
+We read in the aligned SAM file as well as the RDS file containing the adapter information for the sample.
+
+```{r}
+my.sample_sam <- sam2ranges(paste0(INDEX, ".transcript.sam"))
+my.sample_fastq <- readRDS(paste0(INDEX, ".rds"))
+```
+
+We also read in a list of reads to be excluded from analysis, such as reads with middle adapter.
+
+```{r}
+exclusion.files <- list.files(pattern=paste0(INDEX, "_adaptor_*.middle.rds"))
+exclusion.reads <- lapply(exclusion.files, readRDS)
+exclusion.reads <- Reduce(union, exclusion.reads)
+exclusion.reads.index <- match(names(exclusion.reads), row.names(my.sample_fastq))
+```
+
+# Defining UMI groups 
+
+We form the read pregroups based on the transcript/repeat element where the reads align.
+
+```{r}
+pre.groups <- as.character(seqnames(my.sample_sam))
+pre.groups <- pre.groups[match(sub(" .*", "", rownames(my.sample_fastq)), names(my.sample_sam))]
+summary(as.integer(table(pre.groups)))
+```
+
+We also extract the UMI sequence from the oligo-dT adaptor 
+
+```{r}
+(my.umis <- my.sample_fastq$adaptor1$subseq$Sub2)
+```
+
+We now use sarlacc's `umiGroup` function to group the reads together based on the UMI sequence if the distance between the UMI are below a set threshold. We recommend the use of 7 as the threshold for the current ONT read identity error rate, based on the UMI simulation evaluation.
+
+```{r}
+ethresh <- 7
+groups <- umiGroup(my.umis, threshold1=ethresh, groups=pre.groups)
+summary(lengths(groups))
+```
+
+# Writing out read groups
+
+We will now output the read groups for errorcorrection or deduplication.
+Since errorcorrection can take some time to run, we will split the list of read groups into multiple smaller chunks and limit the amount of reads per groups.
+
+```{r}
+read.split <- 2000
+max.read.group.size <- 50
+
+chunk.id <- 1
+chunk.groups <- c()
+chunk.read.total <- 0
+
+for (i in 1:length(groups)) {
+  group <- groups[i]
+  # Remove reads with internal adaptor as it will effect errorcorrection
+  group[[1]] <- group[[1]][is.na(match(group[[1]], exclusion.reads.index))]
+  group.length <- length(unlist(group))
+
+  if (group.length == 0){
+    next
+  }
+
+  if (group.length > max.read.group.size) {
+    group[[1]] <- sample(group[[1]], max.read.group.size)
+    group.length <- max.read.group.size
+  }
+
+  if (length(chunk.groups) == 0) {
+    chunk.groups <- c(chunk.groups, c(group))
+    chunk.read.total <- chunk.read.total + group.length
+  } else {
+    if ((chunk.read.total + group.length) > read.split) {
+      saveRDS(chunk.groups, file=paste0(INDEX, ".groups.", chunk.id, ".rds", sep=""))
+      chunk.id <- chunk.id + 1
+      chunk.groups <- c()
+      chunk.read.total <- 0
+    } 
+
+    chunk.groups <- c(chunk.groups, c(group))
+    chunk.read.total <- chunk.read.total + group.length
+  }
+}
+saveRDS(chunk.groups, file=paste0(INDEX, ".groups.", chunk.id, ".rds", sep=""))
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+
+
+

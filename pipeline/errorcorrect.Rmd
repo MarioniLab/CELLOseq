@@ -1,0 +1,95 @@
+---
+title: CELLO-Seq Sarlacc pipeline - errorcorrection
+author: Rebecca Berrens, Andrian Yang, Aaron Lun, Florian Bieberich
+output:
+  BiocStyle::html_document:
+    toc_float: true
+    titlecaps: false
+---
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(sarlacc)
+```
+
+# Introduction
+
+This series of Rmarkdown files forms the CELLO-Seq sarlacc data processing pipeline, which utilises the `sarlacc` R package as its base.
+
+After UMI grouping, we can either perform errorcorrection or deduplication to collapse each read groups into a single read.
+In the errorcorrection step, we perform multiple sequence alignment within read groups and use the consensus sequence as the representative read.
+
+# Reading files
+
+We read in the read groups along with the RDS file containing the sequence information for all reads.
+
+```{r}
+my.sample_fastq <- readRDS(paste0(INDEX, ".rds"))
+groups <- readRDS(paste0(INDEX, ".groups.", CHUNK, ".rds", sep=""))
+```
+
+We will select only the sequence information of reads within the read groups processed and we will also renumber the groups to keep the read groups consistent.
+This is done to reduce the memory footprint of the errorcorrection step.
+
+```{r}
+my.sample_fastq <- compact(my.sample_fastq[unlist(groups),])
+groups <- lapply(groups, function(x) match(x, unlist(groups)))
+
+(read.seq <- compact(realizeReads(my.sample_fastq)))
+```
+
+# Errorcorrecting reads
+
+We now perform the multiple sequence alignment for each read groups using `multiReadAlign`, which can take quite some time for large groups.
+This can be further sped up by parallelising jobs using the `BiocParallel` package with the appropriate backend supplied to the optional `BPPARAM=` argument.
+
+```{r}
+msa.out <- multiReadAlign(read.seq, groups)
+```
+
+Let's have a look at the result of the multiple sequence alignment for one of the largest group:
+
+```{r}
+by.size <- order(lengths(msa.out$alignments), decreasing=TRUE)
+lapply(msa.out$alignments[by.size[1]], subseq, 1, 70)
+```
+
+We now create consensus sequences from these multiple sequence alignment using `consensusReadSeq`.
+The quality scores are constructed from the qualities of the individual read sequences.
+Higher consensus qualities for a position indicate that many reads are in agreement.
+
+This step can also be further sped up by parallelising jobs using the `BiocParallel` package with the appropriate backend supplied to the optional `BPPARAM=` argument.
+
+```{r}
+(cons.out <- consensusReadSeq(msa.out))
+```
+
+# Writing out reads
+
+We assign unique name for each of the errorcorrected reads, following the format of `sampleName_commonName_chunkID_readID`^[chunkID corresponds to the ID of the read groups chunks being processed (see grouping.Rmd for further explanation), while readID corresponds to the unique ID of the read/read group within the corresponding chunks.].
+
+```{r}
+varnames <- c("ConsRead")
+names(cons.out) <- paste0(INDEX, "_", varnames, "_", CHUNK, "_", seq_along(cons.out))
+```
+
+We now output the errorcorrected reads to a FASTQ file.
+
+```{r}
+outfile <- paste0(INDEX, "_", CHUNK, "_corrected_all.fastq")
+writeXStringSet(cons.out, outfile, format="fastq", qualities <- quality(cons.out))
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+
+
+
