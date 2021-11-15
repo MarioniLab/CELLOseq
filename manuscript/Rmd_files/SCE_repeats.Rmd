@@ -1,0 +1,295 @@
+---
+title: "SCE_repeats"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/SCE_repeats.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r ,include=FALSE}
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(reshape2)
+library(irlba)
+library(biomaRt)
+library(edgeR)
+library(tidyr)
+library(ggplot2)
+library(ComplexHeatmap)
+library(circlize)
+library(stringr)
+library(dplyr)
+theme_set(theme_classic(base_size = 15))
+rm(list=ls())
+```
+
+# read data
+```{r}
+# read data
+TE_age_filtered <-readRDS("~/TE_age_filtered.rds")
+logcounts_lr_repeats <-readRDS("~/logcounts_lr_repeats.rds")
+logcounts_lr_repeats$unique_name <- rownames(logcounts_lr_repeats)
+SCE_lr_all <-readRDS("~/SCE_lr_all.rds")
+```
+
+#Analysis
+Lets merge the age of TEs and then analyse how many TEs are expressed in our single cell dataset.
+First we have to map the ago to the TE location
+
+```{r}
+TE_age_filtered$start_position <- as.numeric(TE_age_filtered$start_position)
+TE_age_filtered$start_position <- TE_age_filtered$start_position+1
+TE_age_filtered$end_position <- as.numeric(TE_age_filtered$end_position)
+
+logcounts_lr_repeats_age <- left_join(TE_age_filtered, logcounts_lr_repeats)
+
+logcounts_lr_repeats_age_not_exp <- logcounts_lr_repeats_age[is.na(logcounts_lr_repeats_age$barcode_1_conditionA_batch1),]
+dim(logcounts_lr_repeats_age_not_exp)
+expressed <- rep("not expressed", nrow(logcounts_lr_repeats_age_not_exp))
+logcounts_lr_repeats_age_not_exp$expressed <- expressed
+saveRDS(logcounts_lr_repeats_age_not_exp, "~/logcounts_lr_repeats_age_not_exp.rds")
+
+logcounts_lr_repeats_age_exp <- logcounts_lr_repeats_age[!is.na(logcounts_lr_repeats_age$barcode_1_conditionA_batch1),]
+dim(logcounts_lr_repeats_age_exp)
+expressed <- rep("expressed", nrow(logcounts_lr_repeats_age_exp))
+logcounts_lr_repeats_age_exp$expressed <- expressed
+rownames(logcounts_lr_repeats_age_exp) <- logcounts_lr_repeats_age_exp$unique_name
+saveRDS(logcounts_lr_repeats_age_exp, "~/logcounts_lr_repeats_age_exp.rds")
+
+logcounts_lr_repeats_age_combined <- rbind(logcounts_lr_repeats_age_exp, logcounts_lr_repeats_age_not_exp)
+logcounts_lr_repeats_age_combined_subset <- logcounts_lr_repeats_age_combined[c(4:7, 10, 100, 101)]
+
+saveRDS(logcounts_lr_repeats_age_combined_subset, "~/logcounts_lr_repeats_age_combined_subset.rds")
+```
+
+# filtering TEs
+```{r}
+toMatch <- c("LTR", "centr", "5S-Deu-L2", "DNA")
+logcounts_lr_repeats_age_exp_filtered <- logcounts_lr_repeats_age_exp[!grepl(paste(toMatch,collapse="|"), logcounts_lr_repeats_age_exp$repFamily),]
+rownames(logcounts_lr_repeats_age_exp_filtered) <- logcounts_lr_repeats_age_exp_filtered$unique_name
+saveRDS(logcounts_lr_repeats_age_exp_filtered, "~/logcounts_lr_repeats_age_exp_filtered.rds")
+
+# high expression
+logcounts_lr_repeats_age_exp_filtered_middle <- logcounts_lr_repeats_age_exp_filtered[rowSums(logcounts_lr_repeats_age_exp_filtered[11:99])>5,]
+logcounts_lr_repeats_age_exp_filtered_high <- logcounts_lr_repeats_age_exp_filtered[rowSums(logcounts_lr_repeats_age_exp_filtered[11:99])>10,]
+logcounts_lr_repeats_age_exp_filtered_very_high <- logcounts_lr_repeats_age_exp_filtered[rowMeans(logcounts_lr_repeats_age_exp_filtered[11:99])>1,]
+
+saveRDS(logcounts_lr_repeats_age_exp_filtered_middle, "~/logcounts_lr_repeats_age_exp_filtered_middle.rds")
+saveRDS(logcounts_lr_repeats_age_exp_filtered_high, "~/logcounts_lr_repeats_age_exp_filtered_high.rds")
+saveRDS(logcounts_lr_repeats_age_exp_filtered_very_high, "~/logcounts_lr_repeats_age_exp_filtered_very_high.rds")
+
+#length
+logcounts_lr_repeats_age_exp_filtered$length <-  logcounts_lr_repeats_age_exp_filtered$end_position -logcounts_lr_repeats_age_exp_filtered$start_position 
+
+# young L1s
+logcounts_lr_repeats_age_exp_filtered_full_length <- logcounts_lr_repeats_age_exp_filtered[abs(logcounts_lr_repeats_age_exp_filtered$length)>5900,]
+toMatch <- c("^L1PA","^L1HS")
+logcounts_lr_repeats_age_exp_filtered_full_length_L1 <- logcounts_lr_repeats_age_exp_filtered_full_length[grepl(paste(toMatch,collapse="|"), logcounts_lr_repeats_age_exp_filtered_full_length$name),]
+
+logcounts_lr_repeats_age_exp_filtered_full_length_L1_high <- logcounts_lr_repeats_age_exp_filtered_full_length_L1[rowSums(logcounts_lr_repeats_age_exp_filtered_full_length_L1[11:99])>9,]
+saveRDS(logcounts_lr_repeats_age_exp_filtered_full_length_L1_high, "~/logcounts_lr_repeats_age_exp_filtered_full_length_L1_high.rds")
+```
+
+# read counts young L1s
+```{r}
+logcounts_lr_repeats_age_exp_filtered_full_length_high <-readRDS( "~/logcounts_lr_repeats_age_exp_filtered_full_length_L1_high.rds")
+counts_lr_repeats <-readRDS("~/counts_lr_repeats.rds")
+
+counts_lr_repeats_age_exp_filtered_full_length_high <-counts_lr_repeats[rownames(counts_lr_repeats) %in%logcounts_lr_repeats_age_exp_filtered_full_length_high$unique_name,]
+
+write.table(file ="~/counts_lr_repeats_age_exp_filtered_full_length_high", counts_lr_repeats_age_exp_filtered_full_length_high, append = FALSE, sep = " ", dec = ".",
+            row.names = TRUE, col.names = TRUE)
+
+```
+
+# percentage of reads mapping to repeats
+```{r}
+counts_2cell_lr_repeats <-readRDS("/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/counts_2cell_lr_repeats.rds")
+
+SCE_2cell_lr_repeats <- readRDS("/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/SCE_2cell_lr_repeats.rds") 
+stats <- perCellQCMetrics(SCE_2cell_lr_repeats)
+qc <- quickPerCellQC(stats, percent_subsets=c("altexps_ERCC_percent"))
+colData(SCE_2cell_lr_repeats)$libsize <- stats$sum
+colData(SCE_2cell_lr_repeats)$genes <- stats$detected
+
+# percentage of reads mapped to MERVL,SINE,L1:
+repeat_counts <- colData(SCE_2cell_lr_repeats)$libsize
+all_counts <- colData(SCE_2cell_lr_all)$libsize
+SCE_2cell_lr_all
+
+logcounts_2cell_lr_repeats_age_exp_filtered_long_MERVL <- logcounts_2cell_lr_repeats_age_exp_filtered_long_ERVL[grepl("MERVL", rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_ERVL)),]
+counts_2cell_lr_repeats_age_exp_filtered_long_MERVL <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_MERVL),]
+mervl_counts <- colSums(counts_2cell_lr_repeats_age_exp_filtered_long_MERVL[1:6])
+
+counts_2cell_lr_repeats_MERVL <- counts_2cell_lr_repeats[grepl("MERVL", rownames(counts_2cell_lr_repeats)),]
+mervl_counts_all <- colSums(counts_2cell_lr_repeats_MERVL[1:6])
+
+
+counts_2cell_lr_repeats_age_exp_filtered_long_sine <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_high_SINE),]
+sine_counts <- colSums(counts_2cell_lr_repeats_age_exp_filtered_long_sine[1:6])
+
+toMatch <- c("B1", "B2")
+counts_2cell_lr_repeats_SINE <- counts_2cell_lr_repeats[grepl(paste(toMatch,collapse="|"), rownames(counts_2cell_lr_repeats)),]
+SINE_counts_all <- colSums(counts_2cell_lr_repeats_SINE[1:6])
+
+logcounts_2cell_lr_repeats_age_exp_filtered_long_L1 <- logcounts_2cell_lr_repeats_age_exp_filtered_long[grepl("L1Md", logcounts_2cell_lr_repeats_age_exp_filtered_long$name),]
+
+counts_2cell_lr_repeats_age_exp_filtered_L1 <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_L1),]
+L1_counts <- colSums(counts_2cell_lr_repeats_age_exp_filtered_L1[1:6])
+
+counts <-data.frame(L1_counts, sine_counts, mervl_counts, repeat_counts, all_counts)
+counts_percent <- counts/counts$all_counts*100
+counts_percent <- counts_percent[,1:4]
+colnames(counts_percent) <- c("L1Md", "SINE B1/B2", "MERVL", "repeats")
+counts_percent_melt <- reshape2::melt(counts_percent)
+
+saveRDS(counts_percent, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/counts_percent.rds")
+
+# percentage of repeats expressed:
+L1Md_perc_expressed <- table(logcounts_2cell_lr_repeats_age_combined_subset_melt_L1Md$expressed)
+L1Md_perc_expressed <- sum(logcounts_2cell_lr_repeats_age_combined_subset_melt_L1Md$expressed=="expressed")/ (sum(logcounts_2cell_lr_repeats_age_combined_subset_melt_L1Md$expressed=="expressed") + sum(logcounts_2cell_lr_repeats_age_combined_subset_melt_L1Md$expressed=="not expressed")) *100
+
+L1_logcounts_2cell_lr_repeats_age_combined_subset_melt <- logcounts_2cell_lr_repeats_age_combined_subset_melt[grepl("L1", logcounts_2cell_lr_repeats_age_combined_subset_melt$repFamily),]
+L1_perc_expressed <- sum(L1_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed")/ (sum(L1_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed") + sum(L1_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="not expressed")) *100
+
+toMatch <- c("B1", "B2")
+SINE_logcounts_2cell_lr_repeats_age_combined_subset_melt <- logcounts_2cell_lr_repeats_age_combined_subset_melt[grepl(paste(toMatch,collapse="|"), logcounts_2cell_lr_repeats_age_combined_subset_melt$repFamily),]
+
+SINE_perc_expressed <- sum(SINE_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed")/ (sum(SINE_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed") + sum(SINE_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="not expressed")) *100
+
+MERVL_logcounts_2cell_lr_repeats_age_combined_subset_melt <- logcounts_2cell_lr_repeats_age_combined_subset_melt[grepl("MERVL", logcounts_2cell_lr_repeats_age_combined_subset_melt$name),]
+MERVL_perc_expressed <- sum(MERVL_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed")/ (sum(MERVL_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="expressed") + sum(MERVL_logcounts_2cell_lr_repeats_age_combined_subset_melt$expressed=="not expressed")) *100
+
+
+# percentage per cell
+mouse_TE_age_filtered_mervl <- mouse_TE_age_filtered[grepl("MERVL", mouse_TE_age_filtered$name),]
+mouse_TE_age_filtered_L1Md <- mouse_TE_age_filtered[grepl("L1Md", mouse_TE_age_filtered$name),]
+toMatch <- c("B1", "B2")
+mouse_TE_age_filtered_SINE_B1_B2 <- mouse_TE_age_filtered[grepl(paste(toMatch,collapse="|"), mouse_TE_age_filtered$repFamily),]
+repeats_in_genome <- c(nrow(mouse_TE_age_filtered_L1Md), nrow(mouse_TE_age_filtered_SINE_B1_B2), nrow(mouse_TE_age_filtered_mervl))
+
+counts_2cell_lr_repeats_age_exp_filtered_long_sine <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_high_SINE),]
+
+counts_2cell_lr_repeats_age_exp_filtered_L1 <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_L1),]
+
+logcounts_2cell_lr_repeats_age_exp_filtered_long_MERVL <- logcounts_2cell_lr_repeats_age_exp_filtered_long_ERVL[grepl("MERVL", rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_ERVL)),]
+counts_2cell_lr_repeats_age_exp_filtered_long_MERVL <- counts_2cell_lr_repeats[ rownames(counts_2cell_lr_repeats) %in% rownames(logcounts_2cell_lr_repeats_age_exp_filtered_long_MERVL),]
+
+n_L1_expressed <-apply(counts_2cell_lr_repeats_age_exp_filtered_L1[1:6],2,function(x)sum(x != 0))
+n_SINE_expressed <-apply(counts_2cell_lr_repeats_age_exp_filtered_long_sine[1:6],2,function(x)sum(x != 0))
+n_MERVL_expressed <-apply(counts_2cell_lr_repeats_age_exp_filtered_long_MERVL[1:6],2,function(x)sum(x != 0))
+
+repeats_expressed <- rbind(n_L1_expressed, n_SINE_expressed, n_MERVL_expressed)
+repeats_expressed <- cbind(repeats_expressed, repeats_in_genome)
+repeats_expressed <- data.frame(repeats_expressed)
+repeats_expressed_percent <- repeats_expressed/repeats_expressed$repeats_in_genome*100
+repeats_expressed_percent <- repeats_expressed_percent[,1:6]
+repeats_expressed_percent <- t(repeats_expressed_percent)
+colnames(repeats_expressed_percent) <- c("L1Md", "SINE B1/B2", "MERVL")
+repeats_expressed_percent_melt <- reshape2::melt(repeats_expressed_percent)
+
+saveRDS(repeats_expressed_percent, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/repeats_expressed_percent.rds")
+```
+
+
+# Overlay Transposon expression with zygotic genome activation
+## load data
+```{r}
+# preimplantation genes DBTMEE (Park et al., 2015)
+minorZGA <- read.delim2("/Users/berren01/Dropbox/Projects/Nanopore/Annotation/MinorZGA_dbteeme_20200701.txt", header=TRUE, sep="\t", stringsAsFactors = FALSE) %>% tidyr::drop_na()
+majorZGA <- read.delim2("/Users/berren01/Dropbox/Projects/Nanopore/Annotation/MajorZGA_dbteeme_20200701.txt", header=TRUE, sep="\t", stringsAsFactors = FALSE)%>% tidyr::drop_na()
+maternal <- read.delim2("/Users/berren01/Dropbox/Projects/Nanopore/Annotation/maternal_genes_dbtmee_20200701.txt", header=TRUE, sep="\t", stringsAsFactors = FALSE) %>% tidyr::drop_na()
+transient2cell <- read.delim2("/Users/berren01/Dropbox/Projects/Nanopore/Annotation/2celltransient_dbtmee_20200701.txt", header=TRUE, sep="\t", stringsAsFactors = FALSE)%>% tidyr::drop_na()
+transient1cell <- read.delim2("/Users/berren01/Dropbox/Projects/Nanopore/Annotation/1celltransient_dbtmee_20200701.txt", header=TRUE, sep="\t", stringsAsFactors = FALSE)%>% tidyr::drop_na()
+```
+
+
+#Expression of zygotic genes in single cell dataset 
+```{r}
+logcounts_2cell_lr_all <- data.frame(logcounts(SCE_2cell_lr_all))
+
+logcounts_2cell_lr_all$ensembl_gene_id <- rownames(logcounts_2cell_lr_all)
+logcounts_2cell_lr_all$ensembl_gene_id <- gsub("\\.\\d+", "", logcounts_2cell_lr_all$ensembl_gene_id)
+
+mart <- useMart(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+logcounts_2cell_lr_all_annotation <- getBM(attributes = c("entrezgene_id", "ensembl_gene_id", 
+                                        "chromosome_name","start_position", "end_position", 
+                                        "mgi_symbol", "strand"),
+                                   filters = "ensembl_gene_id",
+                                   values = logcounts_2cell_lr_all$ensembl_gene_id, mart = mart, useCache = FALSE)
+
+logcounts_2cell_lr_all_biomart <- merge(logcounts_2cell_lr_all, logcounts_2cell_lr_all_annotation) 
+
+
+SCE_2cell_lr_all_minorZGA_logcounts <- logcounts_2cell_lr_all_biomart[logcounts_2cell_lr_all_biomart$mgi_symbol %in% minorZGA$Gene, ]
+transcripts <- rep("minor ZGA", nrow(SCE_2cell_lr_all_minorZGA_logcounts))
+SCE_2cell_lr_all_minorZGA_logcounts$transcripts <- transcripts
+SCE_2cell_lr_all_majorZGA_logcounts <- logcounts_2cell_lr_all_biomart[logcounts_2cell_lr_all_biomart$mgi_symbol %in% majorZGA$Gene, ]
+transcripts <- rep("major ZGA", nrow(SCE_2cell_lr_all_majorZGA_logcounts))
+SCE_2cell_lr_all_majorZGA_logcounts$transcripts <- transcripts
+SCE_2cell_lr_all_maternal_logcounts <- logcounts_2cell_lr_all_biomart[logcounts_2cell_lr_all_biomart$mgi_symbol %in% maternal$Gene, ]
+transcripts <- rep("maternal", nrow(SCE_2cell_lr_all_maternal_logcounts))
+SCE_2cell_lr_all_maternal_logcounts$transcripts <- transcripts
+SCE_2cell_lr_all_transient2cell_logcounts <- logcounts_2cell_lr_all_biomart[logcounts_2cell_lr_all_biomart$mgi_symbol %in% transient2cell$Gene, ]
+transcripts <- rep("transient 2 cell", nrow(SCE_2cell_lr_all_transient2cell_logcounts))
+SCE_2cell_lr_all_transient2cell_logcounts$transcripts <- transcripts
+SCE_2cell_lr_all_transient1cell_logcounts <- logcounts_2cell_lr_all_biomart[logcounts_2cell_lr_all_biomart$mgi_symbol %in% transient1cell$Gene, ]
+transcripts <- rep("transient 1 cell", nrow(SCE_2cell_lr_all_transient1cell_logcounts))
+SCE_2cell_lr_all_transient1cell_logcounts$transcripts <- transcripts
+
+logcounts_2cell_lr_all_maternal_zygotic <- rbind(SCE_2cell_lr_all_minorZGA_logcounts, SCE_2cell_lr_all_majorZGA_logcounts, SCE_2cell_lr_all_maternal_logcounts, SCE_2cell_lr_all_transient2cell_logcounts, SCE_2cell_lr_all_transient1cell_logcounts)
+```
+
+# Correlation of L1 and for zygotic genes
+
+```{r}
+# prepare data
+logcounts_2cell_lr_all_maternal_zygotic_colMeans <- aggregate(logcounts_2cell_lr_all_maternal_zygotic[2:7], list(name=logcounts_2cell_lr_all_maternal_zygotic$transcripts), mean)
+
+###KEEP going here 
+logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md_colMeans <- aggregate(logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md[11:16], list(name=logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md$unique_name), mean)
+
+corr_matrix <- data.frame(t(logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md_colMeans[2:7]), t(logcounts_2cell_lr_all_maternal_zygotic_colMeans[2:7]))
+
+colnames(corr_matrix) <- c( paste(logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md$unique_name)  , "major ZGA", "maternal", "minor ZGA", "transient 1 cell","transient 2 cell")
+
+# correlation
+corr <- round(cor(corr_matrix, method = c("pearson")), 1)
+corr_selected <- corr[27:31,]
+corr_selected <- corr_selected[,1:26]
+
+#cor_test
+cor.test.p <- function(x){
+    FUN <- function(x, y) cor.test(x, y)[["p.value"]]
+    z <- outer(
+      colnames(x), 
+      colnames(x), 
+      Vectorize(function(i,j) FUN(x[,i], x[,j]))
+    )
+    dimnames(z) <- list(colnames(x), colnames(x))
+    z
+}
+
+correlation_test <- round(cor.test.p(corr_matrix),3)
+correlation_test_sel <- correlation_test[27:31,]
+correlation_test_sel <- correlation_test_sel[,1:26]
+
+saveRDS(correlation_test_sel, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/correlation_test_sel_preimplantation_2cell.rds")
+
+corr_selected_2cell_zygotic <- corr_selected
+
+saveRDS(corr_selected_2cell_zygotic, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/corr_selected_2cell_zygotic.rds")
+```
+
+

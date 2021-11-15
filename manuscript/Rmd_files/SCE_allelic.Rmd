@@ -1,0 +1,1305 @@
+---
+title: "SCE_allelic"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/SCE_allelic.html') })
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+library(stringr)
+library(biomaRt)
+library(SingleCellExperiment)
+library(scRNAseq)
+library(tidyverse)
+rm(list=ls())
+```
+
+# Read in data
+```{r, include=FALSE}
+sce_lr_genic <- readRDS("~/SCE_hipsci_lr_genes.rds")
+counts_lr_allele_1 = read.table("allele_1_flair_quantify", header=TRUE, stringsAsFactors = FALSE)
+counts_lr_allele_2 = read.table("allele_1_flair_quantify", header=TRUE, stringsAsFactors = FALSE)
+```
+
+## make dataframe for repeats, ERCC, repeat_isoform and genes
+```{r}
+# changing names
+rownames(counts_lr_allele_1) <- counts_lr_allele_1$ids
+rownames(counts_lr_allele_2) <- counts_lr_allele_2$ids
+
+# rename
+counts_lr_allele_1$ids <- gsub("ConsRead\\_\\d+\\_\\d+_barcode[\\_\\-]\\d+\\_","", counts_lr_allele_1$ids)
+counts_lr_allele_1$ids <- gsub("\\d+E","E", counts_lr_allele_1$ids)
+counts_lr_allele_1$ids <- gsub("\\d+\\_E","E", counts_lr_allele_1$ids)
+counts_lr_allele_1$ids <- gsub("\\:\\d+","", counts_lr_allele_1$ids)
+counts_lr_allele_1$ids <- gsub("\\.\\d+","",counts_lr_allele_1$ids)
+
+counts_lr_allele_2$ids <- gsub("ConsRead\\_\\d+\\_\\d+_barcode[\\_\\-]\\d+\\_","", counts_lr_allele_2$ids)
+counts_lr_allele_2$ids <- gsub("\\d+E","E", counts_lr_allele_2$ids)
+counts_lr_allele_2$ids <- gsub("\\d+\\_E","E", counts_lr_allele_2$ids)
+counts_lr_allele_2$ids <- gsub("\\:\\d+","", counts_lr_allele_2$ids)
+counts_lr_allele_2$ids <- gsub("\\.\\d+","",counts_lr_allele_2$ids)
+
+#ERCC
+counts_lr_allele_1_ERCC <- counts_lr_allele_1[grep("ERCC",counts_lr_allele_1$ids),]
+counts_lr_allele_2_ERCC <- counts_lr_allele_2[grep("ERCC",counts_lr_allele_2$ids),]
+
+# filter our duplicates
+sum(duplicated(counts_lr_allele_1_ERCC$ids))
+sum(duplicated(counts_lr_allele_2_ERCC$ids))
+
+# collate
+counts_lr_allele_1_ERCC <- rowsum(as.matrix(counts_lr_allele_1_ERCC[2:97]), counts_lr_allele_1_ERCC$ids)
+counts_lr_allele_2_ERCC <- rowsum(as.matrix(counts_lr_allele_2_ERCC[2:97]), counts_lr_allele_2_ERCC$ids)
+
+# add column to matrix with type
+type <- rep("ERCC", nrow(counts_lr_allele_1_ERCC))
+counts_lr_allele_1_ERCC_df <- counts_lr_allele_1_ERCC %>% data.frame()
+counts_lr_allele_1_ERCC_df <- cbind(counts_lr_allele_1_ERCC_df, type)
+
+type <- rep("ERCC", nrow(counts_lr_allele_2_ERCC))
+counts_lr_allele_2_ERCC_df <- counts_lr_allele_2_ERCC %>% data.frame()
+counts_lr_allele_2_ERCC_df <- cbind(counts_lr_allele_2_ERCC_df, type)
+
+# genic
+# select only genic
+counts_lr_allele_1_genic <- counts_lr_allele_1[grep("ENSG",counts_lr_allele_1$ids),]
+counts_lr_allele_2_genic <- counts_lr_allele_2[grep("ENSG",counts_lr_allele_2$ids),]
+
+# rename
+counts_lr_allele_1_genic$ids <- gsub("ENST\\d+[\\.\\-]","", counts_lr_allele_1_genic$ids)
+counts_lr_allele_2_genic$ids <- gsub("ENST\\d+[\\.\\-]","", counts_lr_allele_2_genic$ids)
+
+# collate
+counts_lr_allele_1_genic <- rowsum(as.matrix(counts_lr_allele_1_genic[2:97]), counts_lr_allele_1_genic$ids)
+row.names(counts_lr_allele_1_genic) <- gsub("\\d+\\-","", row.names(counts_lr_allele_1_genic))
+
+counts_lr_allele_2_genic <- rowsum(as.matrix(counts_lr_allele_2_genic[2:97]), counts_lr_allele_2_genic$ids)
+row.names(counts_lr_allele_2_genic) <- gsub("\\d+\\-","", row.names(counts_lr_allele_2_genic))
+
+# add column to matrix with type
+type <- rep("genic", nrow(counts_lr_allele_1_genic))
+counts_lr_allele_1_genic_df <- counts_lr_allele_1_genic %>% data.frame()
+counts_lr_allele_1_genic_df <- cbind(counts_lr_allele_1_genic_df, type)
+
+type <- rep("genic", nrow(counts_lr_allele_2_genic))
+counts_lr_allele_2_genic_df <- counts_lr_allele_2_genic %>% data.frame()
+counts_lr_allele_2_genic_df <- cbind(counts_lr_allele_2_genic_df, type)
+
+#merge all dataframes
+counts_lr_combined_allele_1_df <- rbind(counts_lr_allele_1_genic_df, counts_lr_allele_1_ERCC_df)
+counts_lr_combined_allele_2_df <- rbind(counts_lr_allele_2_genic_df, counts_lr_allele_2_ERCC_df)
+```
+
+## SNPs per gene
+```{r}
+SNPs <- read.table("phased_snps.bed", header=FALSE, sep=" ")
+
+# preprocess gene and transcript id
+SNPs$V11 <- gsub(";","",SNPs$V11)
+SNPs$V12 <- gsub(";","",SNPs$V12)
+
+# aggregate snp information per gene
+SNPs$snps <- paste(SNPs$V1, "_", SNPs$V2, "_", SNPs$V3)
+
+# sum of snps over one gene
+SNPs_gene <- tapply(SNPs$snps, SNPs$V11, FUN = function(x) length(unique(x)))
+gene_id <- rownames(SNPs_gene)
+SNPs_gene_df <- data.frame(gene_id, SNPs_gene)
+colnames(SNPs_gene_df) <- c("genes", "SNPs")
+SNPs_gene_ordered <- SNPs_gene_df[order(SNPs_gene_df$SNPs),]
+SNPs_gene_ordered$genes <- gsub("\\.\\d+", "", SNPs_gene_ordered$genes)
+
+genes_snps_1 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs==1,]
+genes_snps_2 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs==2,]
+genes_snps_3 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs==3,]
+genes_snps_4 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs==4,]
+genes_snps_5 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs==5,]
+genes_snps_2_5 <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs>=2 & SNPs_gene_ordered$SNPs<=5,] 
+genes_snps_5plus <- SNPs_gene_ordered[SNPs_gene_ordered$SNPs>5,]
+```
+
+##Filtering for genes
+```{r}
+# filtering
+counts_lr_combined_allele_1_df_filtered <- counts_lr_combined_allele_1_df[is.element(rownames(counts_lr_combined_allele_1_df), rownames(sce_lr_genic)),]
+counts_lr_combined_allele_2_df_filtered <- counts_lr_combined_allele_2_df[is.element(rownames(counts_lr_combined_allele_1_df), rownames(sce_lr_genic)),]
+
+counts_lr_combined_allele_1_df_filtered <- counts_lr_combined_allele_1_df_filtered[,is.element(colnames(counts_lr_combined_allele_1_df_filtered), colnames(sce_lr_genic))]
+counts_lr_combined_allele_2_df_filtered <- counts_lr_combined_allele_2_df_filtered[,is.element(colnames(counts_lr_combined_allele_2_df_filtered), colnames(sce_lr_genic))]
+
+# filter for genes with gene name
+SNPs_gene_ordered_filtered <- SNPs_gene_ordered[is.element(SNPs_gene_ordered$genes, rownames(sce_lr_genic)),]
+```
+
+
+## make one big single cell experiment
+```{r}
+sce_lr_hipsci_genic_df <- data.frame(as.matrix(counts(sce_lr_hipsci_genic)))
+nonsplit <- factor(rep(c("nonsplit"), c(nrow(sce_lr_hipsci_genic_df))))
+sce_lr_hipsci_genic_df$allele <- nonsplit
+
+allele_2 <- factor(rep(c("allele_2"), c(nrow(counts_lr_hipsci_combined_allele_2_df_filtered))))
+counts_lr_hipsci_combined_allele_2_df_filtered$allele <- allele_2
+
+allele_1 <- factor(rep(c("allele_1"), c(nrow(counts_lr_hipsci_combined_allele_1_df_filtered))))
+counts_lr_hipsci_combined_allele_1_df_filtered$allele <- allele_1
+
+counts_lr_hipsci_combined_nonallelic_df_filtered <- sce_lr_hipsci_genic_df[1:89] - (counts_lr_hipsci_combined_allele_1_df_filtered[1:89] + counts_lr_hipsci_combined_allele_2_df_filtered[1:89])
+nonallelic <- factor(rep(c("nonallelic"), c(nrow(counts_lr_hipsci_combined_nonallelic_df_filtered))))
+counts_lr_hipsci_combined_nonallelic_df_filtered$allele <- nonallelic
+
+# assign SNPs
+sce_lr_hipsci_genic_df$genes <- rownames(sce_lr_hipsci_genic_df)
+counts_lr_hipsci_combined_allele_2_df_filtered$genes <- rownames(counts_lr_hipsci_combined_allele_2_df_filtered)
+counts_lr_hipsci_combined_allele_1_df_filtered$genes <- rownames(counts_lr_hipsci_combined_allele_1_df_filtered)
+counts_lr_hipsci_combined_nonallelic_df_filtered$genes <- rownames(counts_lr_hipsci_combined_nonallelic_df_filtered)
+
+# load in ERCC data
+sce_lr_hipsci_genic_ERCC <- swapAltExp(sce_lr_hipsci_genic, "ERCC", saved="original")
+sce_lr_hipsci_genic_ERCC_df <- data.frame(as.matrix(counts(sce_lr_hipsci_genic_ERCC)))
+ercc <- factor(rep(c("ERCC"), c(nrow(sce_lr_hipsci_genic_ERCC_df))))
+sce_lr_hipsci_genic_ERCC_df$allele <- ercc
+sce_lr_hipsci_genic_ERCC_df$genes <- rownames(sce_lr_hipsci_genic_ERCC_df)
+
+lr_hipsci_genic_df_allelic_df <- rbind(sce_lr_hipsci_genic_df, counts_lr_hipsci_combined_allele_2_df_filtered, counts_lr_hipsci_combined_allele_1_df_filtered, counts_lr_hipsci_combined_nonallelic_df_filtered, sce_lr_hipsci_genic_ERCC_df)
+
+# Form a sce 
+counts_lr_hipsci_genic_df_allelic_df = grepl("barcode_", colnames(lr_hipsci_genic_df_allelic_df))
+sce_lr_hipsci_df_allelic <- SingleCellExperiment(assays=list(counts=as.matrix(lr_hipsci_genic_df_allelic_df[, counts_lr_hipsci_genic_df_allelic_df])))
+rowData(sce_lr_hipsci_df_allelic) = lr_hipsci_genic_df_allelic_df[, !counts_lr_hipsci_genic_df_allelic_df]
+
+rownames(sce_lr_hipsci_df_allelic) <- rowData(sce_lr_hipsci_df_allelic)$genes 
+
+allele_1 <- rowData(sce_lr_hipsci_df_allelic)$allele == "allele_1"
+sce_lr_hipsci_df_allelic <- splitAltExps(sce_lr_hipsci_df_allelic, ifelse(allele_1, "allele_1", "gene"))
+allele_2 <- rowData(sce_lr_hipsci_df_allelic)$allele == "allele_2"
+sce_lr_hipsci_df_allelic <- splitAltExps(sce_lr_hipsci_df_allelic, ifelse(allele_2, "allele_2", "gene"))
+nonallelic <- rowData(sce_lr_hipsci_df_allelic)$allele == "nonallelic"
+sce_lr_hipsci_df_allelic <- splitAltExps(sce_lr_hipsci_df_allelic, ifelse(nonallelic, "nonallelic", "gene"))
+is.spike <- rowData(sce_lr_hipsci_df_allelic)$allele == "ERCC"
+sce_lr_hipsci_df_allelic <- splitAltExps(sce_lr_hipsci_df_allelic, ifelse(is.spike, "ERCC", "gene"))
+
+#metadata
+genotype <- factor(rep(c("NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", 
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1",  
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", 
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", 
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1",
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1",   
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3",      
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1",  
+                         "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", 
+                         "EUTS1", "EUTS1", "EUTS1", "EUTS1")))
+                  
+gender <- factor(rep(c("female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male", "male", 
+                         "female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male",  
+                         "female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male", "male", "male", 
+                         "female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male", "male", "male", 
+                         "female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male", "male", "male",
+                         "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male", "male", "male",   
+                         "female", "female", "female", "female", "female",      
+                         "male", "male", "male", "male", "male", "male",  
+                         "female", "female", "female", "female", "female", "female", 
+                         "male", "male", "male", "male")))
+
+colData(sce_lr_hipsci_df_allelic)$cell_type <- genotype
+colData(sce_lr_hipsci_df_allelic)$gender <- gender
+
+# Save statistics on these libraries
+cur_stats <- melt(table(colData(sce_lr_hipsci_df_allelic)$cell_type, colData(sce_lr_hipsci_df_allelic)$gender))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df <- data.frame(row.names = cur_stats$Var2,
+                       Sample = cur_stats$Var1,
+                       gender = cur_stats$Var2,
+                       n_cells = cur_stats$value)
+
+# filter for QC score
+unfiltered <- sce_lr_hipsci_df_allelic
+stats_sce_lr_hipsci_df_allelic <- perCellQCMetrics(sce_lr_hipsci_df_allelic)
+qc <- quickPerCellQC(stats_sce_lr_hipsci_df_allelic, percent_subsets=c("altexps_ERCC_percent"))
+sce_lr_hipsci_df_allelic <- sce_lr_hipsci_df_allelic[,!qc$discard]
+colSums(as.matrix(qc))
+
+# Remove genes that are not expressed
+sce_lr_hipsci_df_allelic <- sce_lr_hipsci_df_allelic[Matrix::rowSums(counts(sce_lr_hipsci_df_allelic)) > 0,]
+sce_lr_hipsci_df_allelic <- scater::addPerFeatureQC(sce_lr_hipsci_df_allelic)
+rowData(sce_lr_hipsci_df_allelic)
+
+# Normalization.
+sce_lr_hipsci_df_allelic <- computeSpikeFactors(sce_lr_hipsci_df_allelic, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic))
+sce_lr_hipsci_df_allelic <- logNormCounts(sce_lr_hipsci_df_allelic)
+
+
+# Add to stats data frame
+cur_stats <- melt(table(colData(sce_lr_hipsci_df_allelic)$cell_type))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+```
+
+## allelic female
+```{r}
+# sort for gender SCE
+sce_lr_hipsci_df_allelic_female <- sce_lr_hipsci_df_allelic[,colData(sce_lr_hipsci_df_allelic)$gender == "female"]
+colData(sce_lr_hipsci_df_allelic_female)$gender
+rownames(sce_lr_hipsci_df_allelic_female) <- rownames(sce_lr_hipsci_df_allelic)
+unfiltered <- sce_lr_hipsci_df_allelic_female
+stats_sce_lr_hipsci_df_allelic_female <- perCellQCMetrics(sce_lr_hipsci_df_allelic_female)
+qc <- quickPerCellQC(stats_sce_lr_hipsci_df_allelic_female, percent_subsets=c("altexps_ERCC_percent"))
+sce_lr_hipsci_df_allelic_female <- sce_lr_hipsci_df_allelic_female[,!qc$discard]
+colSums(as.matrix(qc))
+
+# Remove genes that are not expressed
+sce_lr_hipsci_df_allelic_female <- sce_lr_hipsci_df_allelic_female[Matrix::rowSums(counts(sce_lr_hipsci_df_allelic_female)) > 0,]
+sce_lr_hipsci_df_allelic_female <- scater::addPerFeatureQC(sce_lr_hipsci_df_allelic_female)
+rowData(sce_lr_hipsci_df_allelic_female)
+
+# Normalization.
+sce_lr_hipsci_df_allelic_female <- computeSpikeFactors(sce_lr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_female))
+sce_lr_hipsci_df_allelic_female <- logNormCounts(sce_lr_hipsci_df_allelic_female)
+
+# allele1
+sce_lr_hipsci_df_allelic_female <- swapAltExp(sce_lr_hipsci_df_allelic_female, "allele_1", saved="original")
+sce_lr_hipsci_df_allelic_female <- computeSpikeFactors(sce_lr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_female))
+sce_lr_hipsci_df_allelic_female <- logNormCounts(sce_lr_hipsci_df_allelic_female)
+stats_sce_lr_hipsci_df_allelic_female_allele_1 <- perCellQCMetrics(sce_lr_hipsci_df_allelic_female)
+sce_lr_hipsci_df_allelic_female_allele1_df <- data.frame(as.matrix(logcounts(sce_lr_hipsci_df_allelic_female)))
+lr_female_allele_1_libsize <- stats_sce_lr_hipsci_df_allelic_female_allele_1$sum
+
+# allele2
+sce_lr_hipsci_df_allelic_female <- swapAltExp(sce_lr_hipsci_df_allelic_female, "allele_2", saved="original")
+stats_sce_lr_hipsci_df_allelic_female_allele2 <- perCellQCMetrics(sce_lr_hipsci_df_allelic_female)
+sce_lr_hipsci_df_allelic_female <- computeSpikeFactors(sce_lr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_female))
+lr_female_allele_2_libsize <- stats_sce_lr_hipsci_df_allelic_female_allele2$sum
+sce_lr_hipsci_df_allelic_female <- logNormCounts(sce_lr_hipsci_df_allelic_female)
+sce_lr_hipsci_df_allelic_female_allele2_df <- data.frame(as.matrix(logcounts(sce_lr_hipsci_df_allelic_female)))
+
+rownames(sce_lr_hipsci_df_allelic_female_allele2_df) -> sce_lr_hipsci_df_allelic_female_allele2_df$genes 
+rownames(sce_lr_hipsci_df_allelic_female_allele1_df) -> sce_lr_hipsci_df_allelic_female_allele1_df$genes
+rownames(sce_lr_hipsci_df_allelic_female_allele2_df) <- sce_lr_hipsci_df_allelic_female_allele2_df$genes
+rownames(sce_lr_hipsci_df_allelic_female_allele1_df) <- sce_lr_hipsci_df_allelic_female_allele1_df$genes
+
+sce_lr_hipsci_df_allelic_female_allele2_df <- left_join(sce_lr_hipsci_df_allelic_female_allele2_df, SNPs_nufh3_gene_ordered_filtered)
+sce_lr_hipsci_df_allelic_female_allele2_df[is.na(sce_lr_hipsci_df_allelic_female_allele2_df)] <- 0
+sce_lr_hipsci_df_allelic_female_allele1_df <- left_join(sce_lr_hipsci_df_allelic_female_allele1_df, SNPs_nufh3_gene_ordered_filtered)
+sce_lr_hipsci_df_allelic_female_allele1_df[is.na(sce_lr_hipsci_df_allelic_female_allele1_df)] <- 0
+
+rownames(sce_lr_hipsci_df_allelic_female_allele1_df) <- sce_lr_hipsci_df_allelic_female_allele1_df$genes
+rownames(sce_lr_hipsci_df_allelic_female_allele2_df) <- sce_lr_hipsci_df_allelic_female_allele2_df$genes
+
+sce_lr_hipsci_df_allelic_female_allele1_df$ensembl_gene_id <- rownames(sce_lr_hipsci_df_allelic_female_allele1_df)
+sce_lr_hipsci_df_allelic_female_allele2_df$ensembl_gene_id <- rownames(sce_lr_hipsci_df_allelic_female_allele2_df)
+
+biomartCacheClear()
+human_annotation = useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl")
+allelic_features <- rownames(sce_lr_hipsci_df_allelic_female_allele2_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+sce_lr_hipsci_df_allelic_female_allele2_df_features <- left_join(sce_lr_hipsci_df_allelic_female_allele2_df, genes)
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX <- sce_lr_hipsci_df_allelic_female_allele2_df_features[grep("[0-9]", sce_lr_hipsci_df_allelic_female_allele2_df_features$chromosome_name),]
+
+allelic_features <- rownames(sce_lr_hipsci_df_allelic_female_allele1_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features <- left_join(sce_lr_hipsci_df_allelic_female_allele1_df, genes)
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX <- sce_lr_hipsci_df_allelic_female_allele1_df_features[grep("[0-9]", sce_lr_hipsci_df_allelic_female_allele1_df_features$chromosome_name),]
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_0 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs==0,]
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs==1,]
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs<5) & (sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs>1),]
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs>5,]
+
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_0 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs==0,]
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs==1,]
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs<5) & (sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs>1),]
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs>5,]
+
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_0_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_0[1:46])
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1[1:46])
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5[1:46])
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus[1:46])
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_0_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_0[1:46])
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1[1:46])
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5[1:46])
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus_sum <- rowSums(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus[1:46])
+
+alleles_snp_0_female <- data.frame(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_0_sum, sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_0_sum)
+colnames(alleles_snp_0_female) <- c("allele_1", "allele_2")
+alleles_snp_1_female <- data.frame(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1_sum, sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1_sum)
+colnames(alleles_snp_1_female) <- c("allele_1", "allele_2")
+alleles_snp_2_5_female <- data.frame(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5_sum, sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5_sum)
+colnames(alleles_snp_2_5_female) <- c("allele_1", "allele_2")
+alleles_snp_5plus_female <- data.frame(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus_sum, sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus_sum)
+colnames(alleles_snp_5plus_female) <- c("allele_1", "allele_2")
+
+SNPs <- factor(rep(c("nonallelic"), c(nrow(alleles_snp_0_female))))
+alleles_snp_0_female$SNPs <- SNPs
+SNPs <- factor(rep(c("1"), c(nrow(alleles_snp_1_female))))
+alleles_snp_1_female$SNPs <- SNPs
+SNPs <- factor(rep(c("2-5"), c(nrow(alleles_snp_2_5_female))))
+alleles_snp_2_5_female$SNPs <- SNPs
+SNPs <- factor(rep(c("5+"), c(nrow(alleles_snp_5plus_female))))
+alleles_snp_5plus_female$SNPs <- SNPs
+
+alleles_snps_female <- rbind(alleles_snp_1_female, alleles_snp_2_5_female, alleles_snp_5plus_female)
+alleles_snps_female$ratio <- alleles_snps_female$allele_1/(alleles_snps_female$allele_2+ alleles_snps_female$allele_1)
+alleles_snps_lr_female <- alleles_snps_female[!is.na(alleles_snps_female$ratio),]
+
+# allelic/nonallelic
+alleles_nonallelic_lr_female <- rbind(alleles_snp_0_female, alleles_snp_1_female, alleles_snp_2_5_female, alleles_snp_5plus_female)
+```
+
+## allelic male
+```{r}
+# sort for gender SCE
+sce_lr_hipsci_df_allelic_male <- sce_lr_hipsci_df_allelic[,colData(sce_lr_hipsci_df_allelic)$gender == "male"]
+colData(sce_lr_hipsci_df_allelic_male)$gender
+rownames(sce_lr_hipsci_df_allelic_male) <- rownames(sce_lr_hipsci_df_allelic)
+unfiltered <- sce_lr_hipsci_df_allelic_male
+stats_sce_lr_hipsci_df_allelic_male <- perCellQCMetrics(sce_lr_hipsci_df_allelic_male)
+qc <- quickPerCellQC(stats_sce_lr_hipsci_df_allelic_male, percent_subsets=c("altexps_ERCC_percent"))
+sce_lr_hipsci_df_allelic_male <- sce_lr_hipsci_df_allelic_male[,!qc$discard]
+colSums(as.matrix(qc))
+
+# Remove genes that are not expressed
+sce_lr_hipsci_df_allelic_male <- sce_lr_hipsci_df_allelic_male[Matrix::rowSums(counts(sce_lr_hipsci_df_allelic_male)) > 0,]
+sce_lr_hipsci_df_allelic_male <- scater::addPerFeatureQC(sce_lr_hipsci_df_allelic_male)
+rowData(sce_lr_hipsci_df_allelic_male)
+
+# Normalization.
+sce_lr_hipsci_df_allelic_male <- computeSpikeFactors(sce_lr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_male))
+sce_lr_hipsci_df_allelic_male <- logNormCounts(sce_lr_hipsci_df_allelic_male)
+
+# allele1
+sce_lr_hipsci_df_allelic_male <- swapAltExp(sce_lr_hipsci_df_allelic_male, "allele_1", saved="original")
+sce_lr_hipsci_df_allelic_male <- computeSpikeFactors(sce_lr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_male))
+sce_lr_hipsci_df_allelic_male <- logNormCounts(sce_lr_hipsci_df_allelic_male)
+stats_sce_lr_hipsci_df_allelic_male_allele_1 <- perCellQCMetrics(sce_lr_hipsci_df_allelic_male)
+lr_male_allele_1_libsize <- stats_sce_lr_hipsci_df_allelic_male_allele_1$sum
+sce_lr_hipsci_df_allelic_male_allele1_df <- data.frame(as.matrix(logcounts(sce_lr_hipsci_df_allelic_male)))
+
+# allele2
+sce_lr_hipsci_df_allelic_male <- swapAltExp(sce_lr_hipsci_df_allelic_male, "allele_2", saved="original")
+stats_sce_lr_hipsci_df_allelic_male_allele2 <- perCellQCMetrics(sce_lr_hipsci_df_allelic_male)
+lr_male_allele_2_libsize <- stats_sce_lr_hipsci_df_allelic_male_allele2$sum
+sce_lr_hipsci_df_allelic_male <- computeSpikeFactors(sce_lr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_lr_hipsci_df_allelic_male))
+sce_lr_hipsci_df_allelic_male <- logNormCounts(sce_lr_hipsci_df_allelic_male)
+sce_lr_hipsci_df_allelic_male_allele2_df <- data.frame(as.matrix(logcounts(sce_lr_hipsci_df_allelic_male)))
+
+rownames(sce_lr_hipsci_df_allelic_male_allele2_df) -> sce_lr_hipsci_df_allelic_male_allele2_df$genes 
+rownames(sce_lr_hipsci_df_allelic_male_allele1_df) -> sce_lr_hipsci_df_allelic_male_allele1_df$genes
+rownames(sce_lr_hipsci_df_allelic_male_allele2_df) <- sce_lr_hipsci_df_allelic_male_allele2_df$genes
+rownames(sce_lr_hipsci_df_allelic_male_allele1_df) <- sce_lr_hipsci_df_allelic_male_allele1_df$genes
+
+sce_lr_hipsci_df_allelic_male_allele2_df <- left_join(sce_lr_hipsci_df_allelic_male_allele2_df, SNPs_euts1_gene_ordered_filtered)
+sce_lr_hipsci_df_allelic_male_allele2_df[is.na(sce_lr_hipsci_df_allelic_male_allele2_df)] <- 0
+sce_lr_hipsci_df_allelic_male_allele1_df <- left_join(sce_lr_hipsci_df_allelic_male_allele1_df, SNPs_euts1_gene_ordered_filtered)
+sce_lr_hipsci_df_allelic_male_allele1_df[is.na(sce_lr_hipsci_df_allelic_male_allele1_df)] <- 0
+
+rownames(sce_lr_hipsci_df_allelic_male_allele1_df) <- sce_lr_hipsci_df_allelic_male_allele1_df$genes
+rownames(sce_lr_hipsci_df_allelic_male_allele2_df) <- sce_lr_hipsci_df_allelic_male_allele2_df$genes
+
+sce_lr_hipsci_df_allelic_male_allele1_df$ensembl_gene_id <- rownames(sce_lr_hipsci_df_allelic_male_allele1_df)
+sce_lr_hipsci_df_allelic_male_allele2_df$ensembl_gene_id <- rownames(sce_lr_hipsci_df_allelic_male_allele2_df)
+
+allelic_features <- rownames(sce_lr_hipsci_df_allelic_male_allele2_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+
+sce_lr_hipsci_df_allelic_male_allele2_df_features <- left_join(sce_lr_hipsci_df_allelic_male_allele2_df, genes)
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX <- sce_lr_hipsci_df_allelic_male_allele2_df_features[grep("[0-9]", sce_lr_hipsci_df_allelic_male_allele2_df_features$chromosome_name),]
+
+allelic_features <- rownames(sce_lr_hipsci_df_allelic_male_allele1_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features <- left_join(sce_lr_hipsci_df_allelic_male_allele1_df, genes)
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX <- sce_lr_hipsci_df_allelic_male_allele1_df_features[grep("[0-9]", sce_lr_hipsci_df_allelic_male_allele1_df_features$chromosome_name),]
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_0 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs==0,]
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs==1,]
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs<5) & (sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs>1),]
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs>5,]
+
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_0 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs==0,]
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs==1,]
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs<5) & (sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs>1),]
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs>5,]
+
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_0_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_0[1:39])
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1[1:39])
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5[1:39])
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus[1:39])
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_0_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_0[1:39])
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1[1:39])
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5[1:39])
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus_sum <- rowSums(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus[1:39])
+
+alleles_snp_0_male <- data.frame(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_0_sum, sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_0_sum)
+colnames(alleles_snp_0_male) <- c("allele_1", "allele_2")
+alleles_snp_1_male <- data.frame(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1_sum, sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1_sum)
+colnames(alleles_snp_1_male) <- c("allele_1", "allele_2")
+alleles_snp_2_5_male <- data.frame(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5_sum, sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5_sum)
+colnames(alleles_snp_2_5_male) <- c("allele_1", "allele_2")
+alleles_snp_5plus_male <- data.frame(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus_sum, sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus_sum)
+colnames(alleles_snp_5plus_male) <- c("allele_1", "allele_2")
+
+SNPs <- factor(rep(c("nonallelic"), c(nrow(alleles_snp_0_male))))
+alleles_snp_0_male$SNPs <- SNPs
+SNPs <- factor(rep(c("1"), c(nrow(alleles_snp_1_male))))
+alleles_snp_1_male$SNPs <- SNPs
+SNPs <- factor(rep(c("2-5"), c(nrow(alleles_snp_2_5_male))))
+alleles_snp_2_5_male$SNPs <- SNPs
+SNPs <- factor(rep(c("5+"), c(nrow(alleles_snp_5plus_male))))
+alleles_snp_5plus_male$SNPs <- SNPs
+
+alleles_snps_male <- rbind(alleles_snp_1_male, alleles_snp_2_5_male, alleles_snp_5plus_male)
+alleles_snps_male$ratio <- alleles_snps_male$allele_1/(alleles_snps_male$allele_2+ alleles_snps_male$allele_1)
+alleles_snps_lr_male <- alleles_snps_male[!is.na(alleles_snps_male$ratio),]
+
+# allelic/nonallelic
+alleles_nonallelic_lr_male <- rbind(alleles_snp_0_male, alleles_snp_1_male, alleles_snp_2_5_male, alleles_snp_5plus_male)
+```
+
+## female allelic genes per cell per SNP
+```{r}
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_nonallelic <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_nonallelic[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_nonallelic <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_nonallelic[1:46], 2, function(c)sum(c!=0)))
+nonallelic_genes_expressed <- nonallelic_genes_expressed_allele_1 + nonallelic_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_1[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_1[1:46], 2, function(c)sum(c!=0)))
+SNP_1_genes_expressed <- SNP_1_genes_expressed_allele_1 + SNP_1_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2[1:46], 2, function(c)sum(c!=0)))
+SNP_2_genes_expressed <- SNP_2_genes_expressed_allele_1 + SNP_2_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_3 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_3[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_3 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_3[1:46], 2, function(c)sum(c!=0)))
+SNP_3_genes_expressed <- SNP_3_genes_expressed_allele_1 + SNP_3_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_4 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_4[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_4 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_4[1:46], 2, function(c)sum(c!=0)))
+SNP_4_genes_expressed <- SNP_4_genes_expressed_allele_1 + SNP_4_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5[1:46], 2, function(c)sum(c!=0)))
+SNP_5_genes_expressed <- SNP_5_genes_expressed_allele_1 + SNP_5_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs > 1 & sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_2_5[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs > 1 & sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_2_5[1:46], 2, function(c)sum(c!=0)))
+SNP_2_5_genes_expressed <- SNP_2_5_genes_expressed_allele_1 + SNP_2_5_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele1_df_features_noX_5plus[1:46], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_female_allele2_df_features_noX_5plus[1:46], 2, function(c)sum(c!=0)))
+SNP_5plus_genes_expressed <- SNP_5plus_genes_expressed_allele_1 + SNP_5plus_genes_expressed_allele_2
+
+number_genes_expressed_per_SNP_lr_female_small <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_genes_expressed,SNP_3_genes_expressed,SNP_4_genes_expressed, SNP_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_lr_female_small) <- c("0", "1", "2","3", "4", "5", "5+")
+number_genes_expressed_per_SNP_lr_female_small_melt <- melt(number_genes_expressed_per_SNP_lr_female_small)
+
+number_genes_expressed_per_SNP_lr_female <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_lr_female) <- c("0", "1", "2_5", "5+")
+number_genes_expressed_per_SNP_lr_female_melt <- melt(number_genes_expressed_per_SNP_lr_female)
+
+# libsize controlled
+lr_female_libsize <- lr_female_allele_2_libsize + lr_female_allele_1_libsize
+number_genes_expressed_per_SNP_lr_female_libsize <- number_genes_expressed_per_SNP_lr_female/lr_female_libsize*100
+number_genes_expressed_per_SNP_lr_female_libsize_melt <- melt(number_genes_expressed_per_SNP_lr_female_libsize)
+
+number_genes_expressed_per_SNP_lr_female_libsize_small <- number_genes_expressed_per_SNP_lr_female_small/lr_female_libsize*100
+number_genes_expressed_per_SNP_lr_female_libsize_small_melt <- melt(number_genes_expressed_per_SNP_lr_female_libsize_small)
+```
+
+## male allelic genes per cell per SNP
+```{r}
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_nonallelic <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_nonallelic[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_nonallelic <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_nonallelic[1:39], 2, function(c)sum(c!=0)))
+nonallelic_genes_expressed <- nonallelic_genes_expressed_allele_1 + nonallelic_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_1[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_1[1:39], 2, function(c)sum(c!=0)))
+SNP_1_genes_expressed <- SNP_1_genes_expressed_allele_1 + SNP_1_genes_expressed_allele_2
+
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2[1:39], 2, function(c)sum(c!=0)))
+SNP_2_genes_expressed <- SNP_2_genes_expressed_allele_1 + SNP_2_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_3 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_3[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_3 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_3[1:39], 2, function(c)sum(c!=0)))
+SNP_3_genes_expressed <- SNP_3_genes_expressed_allele_1 + SNP_3_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_4 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_4[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_4 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_4[1:39], 2, function(c)sum(c!=0)))
+SNP_4_genes_expressed <- SNP_4_genes_expressed_allele_1 + SNP_4_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5[1:39], 2, function(c)sum(c!=0)))
+SNP_5_genes_expressed <- SNP_5_genes_expressed_allele_1 + SNP_5_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs > 1 & sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_2_5[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5 <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs > 1 & sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_2_5[1:39], 2, function(c)sum(c!=0)))
+SNP_2_5_genes_expressed <- SNP_2_5_genes_expressed_allele_1 + SNP_2_5_genes_expressed_allele_2
+
+sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_1 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele1_df_features_noX_5plus[1:39], 2, function(c)sum(c!=0)))
+sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus <- sce_lr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_2 <- data.frame(apply(sce_lr_hipsci_df_allelic_male_allele2_df_features_noX_5plus[1:39], 2, function(c)sum(c!=0)))
+SNP_5plus_genes_expressed <- SNP_5plus_genes_expressed_allele_1 + SNP_5plus_genes_expressed_allele_2
+
+number_genes_expressed_per_SNP_lr_male_small <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_genes_expressed,SNP_3_genes_expressed,SNP_4_genes_expressed, SNP_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_lr_male_small) <- c("0", "1", "2","3","4","5", "5+")
+number_genes_expressed_per_SNP_lr_male_small_melt <- melt(number_genes_expressed_per_SNP_lr_male_small)
+
+number_genes_expressed_per_SNP_lr_male <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_lr_male) <- c("0", "1", "2_5", "5+")
+number_genes_expressed_per_SNP_lr_male_melt <- melt(number_genes_expressed_per_SNP_lr_male)
+
+# libsize controlled
+lr_male_libsize <- lr_male_allele_2_libsize + lr_male_allele_1_libsize
+number_genes_expressed_per_SNP_lr_male_libsize <- number_genes_expressed_per_SNP_lr_male/lr_male_libsize*100
+number_genes_expressed_per_SNP_lr_male_libsize_melt <- melt(number_genes_expressed_per_SNP_lr_male_libsize)
+
+number_genes_expressed_per_SNP_lr_male_libsize_small <- number_genes_expressed_per_SNP_lr_male_small/lr_male_libsize*100
+number_genes_expressed_per_SNP_lr_male_libsize_small_melt <- melt(number_genes_expressed_per_SNP_lr_male_libsize_small)
+```
+
+# combine gender
+```{r}
+alleles_snps_lr_both_genders <- rbind(alleles_snps_lr_male, alleles_snps_lr_female)
+alleles_nonallelic_lr_both_genders <- rbind(alleles_nonallelic_lr_male, alleles_nonallelic_lr_female)
+
+number_genes_expressed_per_SNP_lr_both_genders <- rbind(number_genes_expressed_per_SNP_lr_male, number_genes_expressed_per_SNP_lr_female)
+number_genes_expressed_per_SNP_lr_both_genders_melt <- melt(number_genes_expressed_per_SNP_lr_both_genders)
+saveRDS(number_genes_expressed_per_SNP_lr_both_genders_melt, "~/number_genes_expressed_per_SNP_lr_both_genders_melt.rds")
+
+number_genes_expressed_per_SNP_lr_both_genders_small <- rbind(number_genes_expressed_per_SNP_lr_male_small, number_genes_expressed_per_SNP_lr_female_small)
+number_genes_expressed_per_SNP_lr_both_genders_small_melt <- melt(number_genes_expressed_per_SNP_lr_both_genders_small)
+
+```
+
+
+# repeats allelic
+```{r}
+# select only repeats
+counts_lr_allele_1_repeats <- counts_lr_allele_1[grep("\\_chr\\d+\\_",counts_lr_allele_1$ids),]
+counts_lr_allele_2_repeats <- counts_lr_allele_2[grep("\\_chr\\d+\\_",counts_lr_allele_2$ids),]
+
+logcounts_hipsci_lr_repeats <-readRDS("~/logcounts_hipsci_lr_repeats.rds")
+dim(logcounts_hipsci_lr_repeats)
+
+# filter out allelic counts
+logcounts_hipsci_lr_repeats_non_allelic <- logcounts_hipsci_lr_repeats[!logcounts_hipsci_lr_repeats$name %in% counts_lr_allele_1_repeats$ids, ]
+logcounts_hipsci_lr_repeats_non_allelic <- logcounts_hipsci_lr_repeats[!logcounts_hipsci_lr_repeats$name %in% counts_lr_allele_2_repeats$ids, ]
+logcounts_hipsci_lr_repeats_non_allelic_n <- apply( logcounts_hipsci_lr_repeats_non_allelic[1:89] , 2 , function(x) sum ( x > 0 ) )
+
+# filter cells that did not pass quality control from allelic counts 
+bad_cells <- c("barcode_11_conditionB_batch1","barcode_21_conditionB_batch1","barcode_24_conditionB_batch1","barcode_65_conditionA_batch1","barcode_74_conditionA_batch1","barcode_91_conditionB_batch1", "barcode_93_conditionB_batch1")
+
+counts_lr_allele_1_repeats <- counts_lr_allele_1_repeats[ , -which(names(counts_lr_allele_1_repeats) %in% bad_cells)]
+counts_lr_allele_2_repeats <- counts_lr_allele_2_repeats[ , -which(names(counts_lr_allele_2_repeats) %in% bad_cells)]
+
+# number of repeats with allelic counts
+counts_lr_allele_1_repeats_n <- colSums(counts_lr_allele_1_repeats[2:90])
+counts_lr_allele_2_repeats_n <- colSums(counts_lr_allele_2_repeats[2:90])
+counts_lr_allelic_repeats_n <- counts_lr_allele_1_repeats_n + counts_lr_allele_2_repeats_n
+
+# count if value > 0
+counts_lr_allele_1_repeats_n <- apply( counts_lr_allele_1_repeats[2:90] , 2 , function(x) sum ( x > 0 ) )
+counts_lr_allele_2_repeats_n <- apply( counts_lr_allele_2_repeats[2:90] , 2 , function(x) sum ( x > 0 ) )
+counts_lr_allelic_repeats_n <- counts_lr_allele_1_repeats_n + counts_lr_allele_2_repeats_n
+
+
+# combine both data
+logcounts_hipsci_lr_repeats_allele <- data.frame(logcounts_hipsci_lr_repeats_non_allelic_n,counts_lr_allelic_repeats_n)
+colnames(logcounts_hipsci_lr_repeats_allele) <- c("non-allelic", "allelic")
+logcounts_hipsci_lr_repeats_allele_melt <- melt(logcounts_hipsci_lr_repeats_allele)
+
+logcounts_hipsci_lr_repeats_allele_melt %>% ggplot(aes(y=value, x =variable,fill=variable)) +
+  geom_boxplot()
+
+saveRDS(logcounts_hipsci_lr_repeats_allele_melt, "~/logcounts_hipsci_lr_repeats_allele_melt.rds")
+
+```
+
+#Read in the short read 96 cell data of hipsci dataset
+```{r, include=FALSE}
+SCE_hipsci_sr <- readRDS("~/SCE_hipsci_sr_all.rds")
+
+# all samples
+mydir = "~/hipsci_haplotype/hipsci_allelic_expression/allele_1/"
+myfiles = list.files(path=mydir, pattern="*", full.names=TRUE)
+counts_sr_allele_1 = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, row.names=1, skip=1, col.names=basename(x)))
+counts_sr_allele_1_df = Reduce(cbind, counts_sr_allele_1)
+counts_sr_allele_1_mat <- as.matrix(counts_sr_allele_1_df)
+
+mydir = "~/hipsci_allelic_expression/allele_2/"
+myfiles = list.files(path=mydir, pattern="*", full.names=TRUE)
+counts_sr_allele_2 = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, row.names=1, skip=1, col.names=basename(x)))
+counts_sr_allele_2_df = Reduce(cbind, counts_sr_allele_2)
+counts_sr_allele_2_mat <- as.matrix(counts_sr_allele_2_df)
+```
+
+##Filtering for genes in genic hipsci
+```{r}
+# filtering
+counts_sr_allele_1_df_filtered <- counts_sr_allele_1_df[is.element(rownames(counts_sr_allele_1_df), rownames(SCE_hipsci_sr)),]
+counts_sr_allele_2_df_filtered <- counts_sr_allele_2_df[is.element(rownames(counts_sr_allele_2_df), rownames(SCE_hipsci_sr)),]
+
+#cols
+colnames(counts_sr_allele_1_df_filtered) <- gsub("_allele_1", "", colnames(counts_sr_allele_1_df_filtered))
+colnames(counts_sr_allele_2_df_filtered) <- gsub("_allele_2", "", colnames(counts_sr_allele_2_df_filtered))
+colnames(counts_sr_allele_1_df_filtered) <- gsub("SLX.18941.", "", colnames(counts_sr_allele_1_df_filtered))
+colnames(counts_sr_allele_2_df_filtered) <- gsub("SLX.18941.", "", colnames(counts_sr_allele_2_df_filtered))
+colnames(SCE_hipsci_sr) <- gsub("trim_galore_output.", "", colnames(SCE_hipsci_sr))
+SCE_hipsci_sr
+counts_sr_allele_1_df_filtered <- counts_sr_allele_1_df_filtered[,is.element(colnames(counts_sr_allele_1_df_filtered), colnames(SCE_hipsci_sr))]
+counts_sr_allele_2_df_filtered <- counts_sr_allele_2_df_filtered[,is.element(colnames(counts_sr_allele_2_df_filtered), colnames(SCE_hipsci_sr))]
+dim(counts_sr_allele_1_df_filtered)
+
+# filter for genes with gene name
+SNPs_nufh3_gene_ordered_filtered <- SNPs_nufh3_gene_ordered[is.element(rownames(SNPs_nufh3_gene_ordered), rownames(SCE_hipsci_sr)),]
+dim(SNPs_nufh3_gene_ordered_filtered)
+SNPs_euts1_gene_ordered_filtered <- SNPs_euts1_gene_ordered[is.element(rownames(SNPs_euts1_gene_ordered), rownames(SCE_hipsci_sr)),]
+dim(SNPs_euts1_gene_ordered_filtered)
+```
+
+## make one big single cell experiment
+```{r}
+SCE_hipsci_sr_df <- data.frame(as.matrix(counts(SCE_hipsci_sr)))
+nonsplit <- factor(rep(c("nonallelic"), c(nrow(SCE_hipsci_sr_df))))
+SCE_hipsci_sr_df$allele <- nonsplit
+
+allele_2 <- factor(rep(c("allele_2"), c(nrow(counts_sr_allele_2_df_filtered))))
+counts_sr_allele_2_df_filtered$allele <- allele_2
+
+allele_1 <- factor(rep(c("allele_1"), c(nrow(counts_sr_allele_1_df_filtered))))
+counts_sr_allele_1_df_filtered$allele <- allele_1
+
+# assign SNPs
+SCE_hipsci_sr_df$genes <- rownames(SCE_hipsci_sr_df)
+counts_sr_allele_2_df_filtered$genes <- rownames(counts_sr_allele_2_df_filtered)
+counts_sr_allele_1_df_filtered$genes <- rownames(counts_sr_allele_1_df_filtered)
+
+# load in ERCC data
+SCE_hipsci_sr_ERCC <- swapAltExp(SCE_hipsci_sr, "ERCC", saved="original")
+SCE_hipsci_sr_ERCC_df <- data.frame(as.matrix(counts(SCE_hipsci_sr_ERCC)))
+ercc <- factor(rep(c("ERCC"), c(nrow(SCE_hipsci_sr_ERCC_df))))
+SCE_hipsci_sr_ERCC_df$allele <- ercc
+SCE_hipsci_sr_ERCC_df$genes <- rownames(SCE_hipsci_sr_ERCC_df)
+
+sr_hipsci_df_allelic_df <- rbind(SCE_hipsci_sr_df, counts_sr_allele_2_df_filtered, counts_sr_allele_1_df_filtered, SCE_hipsci_sr_ERCC_df)
+
+# Form a sce 
+counts_sr_hipsci_df_allelic_df = grepl("i.", colnames(sr_hipsci_df_allelic_df))
+sce_sr_hipsci_df_allelic <- SingleCellExperiment(assays=list(counts=as.matrix(sr_hipsci_df_allelic_df[, counts_sr_hipsci_df_allelic_df])))
+rowData(sce_sr_hipsci_df_allelic) = sr_hipsci_df_allelic_df[, !counts_sr_hipsci_df_allelic_df]
+
+rownames(sce_sr_hipsci_df_allelic) <- rowData(sce_sr_hipsci_df_allelic)$genes 
+
+allele_1 <- rowData(sce_sr_hipsci_df_allelic)$allele == "allele_1"
+sce_sr_hipsci_df_allelic <- splitAltExps(sce_sr_hipsci_df_allelic, ifelse(allele_1, "allele_1", "gene"))
+allele_2 <- rowData(sce_sr_hipsci_df_allelic)$allele == "allele_2"
+sce_sr_hipsci_df_allelic <- splitAltExps(sce_sr_hipsci_df_allelic, ifelse(allele_2, "allele_2", "gene"))
+nonallelic <- rowData(sce_sr_hipsci_df_allelic)$allele == "nonallelic"
+sce_sr_hipsci_df_allelic <- splitAltExps(sce_sr_hipsci_df_allelic, ifelse(nonallelic, "nonallelic", "gene"))
+is.spike <- rowData(sce_sr_hipsci_df_allelic)$allele == "ERCC"
+sce_sr_hipsci_df_allelic <- splitAltExps(sce_sr_hipsci_df_allelic, ifelse(is.spike, "ERCC", "gene"))
+
+#metadata
+genotype <- factor(rep(c("NUFH3","EUTS1"), times=c(39,42)))
+gender <- factor(rep(c("female","male"), times=c(39,42)))
+
+colData(sce_sr_hipsci_df_allelic)$cell_type <- genotype
+colData(sce_sr_hipsci_df_allelic)$gender <- gender
+
+# Save statistics on these libraries
+cur_stats <- melt(table(colData(sce_sr_hipsci_df_allelic)$cell_type, colData(sce_sr_hipsci_df_allelic)$gender))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df <- data.frame(row.names = cur_stats$Var2,
+                       Sample = cur_stats$Var1,
+                       gender = cur_stats$Var2,
+                       n_cells = cur_stats$value)
+
+# filter for QC score
+unfiltered <- sce_sr_hipsci_df_allelic
+stats_sce_sr_hipsci_df_allelic <- perCellQCMetrics(sce_sr_hipsci_df_allelic)
+qc <- quickPerCellQC(stats_sce_sr_hipsci_df_allelic, percent_subsets=c("altexps_ERCC_percent"))
+sce_sr_hipsci_df_allelic <- sce_sr_hipsci_df_allelic[,!qc$discard]
+colSums(as.matrix(qc))
+
+sce_sr_hipsci_df_allelic_allele1 <- swapAltExp(sce_sr_hipsci_df_allelic, "allele_1", saved="original")
+stats_sce_sr_hipsci_df_allelic_allele1 <- perCellQCMetrics(sce_sr_hipsci_df_allelic_allele1)
+sce_sr_hipsci_df_allelic_allele2 <- swapAltExp(sce_sr_hipsci_df_allelic, "allele_2", saved="original")
+stats_sce_sr_hipsci_df_allelic <- perCellQCMetrics(sce_sr_hipsci_df_allelic)
+sce_sr_hipsci_df_allelic_nonallelic <- swapAltExp(sce_sr_hipsci_df_allelic, "nonallelic", saved="original")
+stats_sce_sr_hipsci_df_allelic_nonallelic <- perCellQCMetrics(sce_sr_hipsci_df_allelic_nonallelic)
+
+# Remove genes that are not expressed
+sce_sr_hipsci_df_allelic <- sce_sr_hipsci_df_allelic[Matrix::rowSums(counts(sce_sr_hipsci_df_allelic)) > 0,]
+sce_sr_hipsci_df_allelic <- scater::addPerFeatureQC(sce_sr_hipsci_df_allelic)
+rowData(sce_sr_hipsci_df_allelic)
+
+# Normalization.
+sce_sr_hipsci_df_allelic <- computeSpikeFactors(sce_sr_hipsci_df_allelic, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic))
+sce_sr_hipsci_df_allelic <- logNormCounts(sce_sr_hipsci_df_allelic)
+
+
+# Add to stats data frame
+cur_stats <- melt(table(colData(sce_sr_hipsci_df_allelic)$cell_type))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+
+```
+
+
+## allelic female
+```{r}
+# sort for gender SCE
+sce_sr_hipsci_df_allelic_female <- sce_sr_hipsci_df_allelic[,colData(sce_sr_hipsci_df_allelic)$gender == "female"]
+colData(sce_sr_hipsci_df_allelic_female)$gender
+rownames(sce_sr_hipsci_df_allelic_female) <- rownames(sce_sr_hipsci_df_allelic)
+unfiltered <- sce_sr_hipsci_df_allelic_female
+stats_sce_sr_hipsci_df_allelic_female <- perCellQCMetrics(sce_sr_hipsci_df_allelic_female)
+qc <- quickPerCellQC(stats_sce_sr_hipsci_df_allelic_female, percent_subsets=c("altexps_ERCC_percent"))
+sce_sr_hipsci_df_allelic_female <- sce_sr_hipsci_df_allelic_female[,!qc$discard]
+colSums(as.matrix(qc))
+
+# Remove genes that are not expressed
+sce_sr_hipsci_df_allelic_female <- sce_sr_hipsci_df_allelic_female[Matrix::rowSums(counts(sce_sr_hipsci_df_allelic_female)) > 0,]
+sce_sr_hipsci_df_allelic_female <- scater::addPerFeatureQC(sce_sr_hipsci_df_allelic_female)
+rowData(sce_sr_hipsci_df_allelic_female)
+
+# Normalization.
+sce_sr_hipsci_df_allelic_female <- computeSpikeFactors(sce_sr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_female))
+sce_sr_hipsci_df_allelic_female <- logNormCounts(sce_sr_hipsci_df_allelic_female)
+
+# allele1
+sce_sr_hipsci_df_allelic_female <- swapAltExp(sce_sr_hipsci_df_allelic_female, "allele_1", saved="original")
+sce_sr_hipsci_df_allelic_female <- computeSpikeFactors(sce_sr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_female))
+sce_sr_hipsci_df_allelic_female <- logNormCounts(sce_sr_hipsci_df_allelic_female)
+stats_sce_sr_hipsci_df_allelic_female_allele_1 <- perCellQCMetrics(sce_sr_hipsci_df_allelic_female)
+sr_allele_1_female_libsize <- stats_sce_sr_hipsci_df_allelic_female_allele_1$sum
+sce_sr_hipsci_df_allelic_female_allele1_df <- data.frame(as.matrix(logcounts(sce_sr_hipsci_df_allelic_female)))
+
+# allele2
+sce_sr_hipsci_df_allelic_female <- swapAltExp(sce_sr_hipsci_df_allelic_female, "allele_2", saved="original")
+stats_sce_sr_hipsci_df_allelic_female_allele2 <- perCellQCMetrics(sce_sr_hipsci_df_allelic_female)
+sce_sr_hipsci_df_allelic_female <- computeSpikeFactors(sce_sr_hipsci_df_allelic_female, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_female))
+sce_sr_hipsci_df_allelic_female <- logNormCounts(sce_sr_hipsci_df_allelic_female)
+sr_allele_2_female_libsize <- stats_sce_sr_hipsci_df_allelic_female_allele2$sum
+
+sce_sr_hipsci_df_allelic_female_allele2_df <- data.frame(as.matrix(logcounts(sce_sr_hipsci_df_allelic_female)))
+
+rownames(sce_sr_hipsci_df_allelic_female_allele2_df) -> sce_sr_hipsci_df_allelic_female_allele2_df$genes 
+rownames(sce_sr_hipsci_df_allelic_female_allele1_df) -> sce_sr_hipsci_df_allelic_female_allele1_df$genes
+rownames(sce_sr_hipsci_df_allelic_female_allele2_df) <- sce_sr_hipsci_df_allelic_female_allele2_df$genes
+rownames(sce_sr_hipsci_df_allelic_female_allele1_df) <- sce_sr_hipsci_df_allelic_female_allele1_df$genes
+
+sce_sr_hipsci_df_allelic_female_allele2_df <- left_join(sce_sr_hipsci_df_allelic_female_allele2_df, SNPs_nufh3_gene_ordered_filtered)
+sce_sr_hipsci_df_allelic_female_allele2_df[is.na(sce_sr_hipsci_df_allelic_female_allele2_df)] <- 0
+sce_sr_hipsci_df_allelic_female_allele1_df <- left_join(sce_sr_hipsci_df_allelic_female_allele1_df, SNPs_nufh3_gene_ordered_filtered)
+sce_sr_hipsci_df_allelic_female_allele1_df[is.na(sce_sr_hipsci_df_allelic_female_allele1_df)] <- 0
+
+rownames(sce_sr_hipsci_df_allelic_female_allele1_df) <- sce_sr_hipsci_df_allelic_female_allele1_df$genes
+rownames(sce_sr_hipsci_df_allelic_female_allele2_df) <- sce_sr_hipsci_df_allelic_female_allele2_df$genes
+
+sce_sr_hipsci_df_allelic_female_allele1_df$ensembl_gene_id <- rownames(sce_sr_hipsci_df_allelic_female_allele1_df)
+sce_sr_hipsci_df_allelic_female_allele2_df$ensembl_gene_id <- rownames(sce_sr_hipsci_df_allelic_female_allele2_df)
+
+
+allelic_features <- rownames(sce_sr_hipsci_df_allelic_female_allele2_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+
+sce_sr_hipsci_df_allelic_female_allele2_df_features <- left_join(sce_sr_hipsci_df_allelic_female_allele2_df, genes)
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX <- sce_sr_hipsci_df_allelic_female_allele2_df_features[grep("[0-9]", sce_sr_hipsci_df_allelic_female_allele2_df_features$chromosome_name),]
+
+allelic_features <- rownames(sce_sr_hipsci_df_allelic_female_allele1_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features <- left_join(sce_sr_hipsci_df_allelic_female_allele1_df, genes)
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX <- sce_sr_hipsci_df_allelic_female_allele1_df_features[grep("[0-9]", sce_sr_hipsci_df_allelic_female_allele1_df_features$chromosome_name),]
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_0 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs==0,]
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs==1,]
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs<5) & (sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs>1),]
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs>5,]
+
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_0 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs==0,]
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs==1,]
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs<5) & (sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs>1),]
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs>5,]
+
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_0_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_0[1:38])
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1[1:38])
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5[1:38])
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus[1:38])
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_0_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_0[1:38])
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1[1:38])
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5[1:38])
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus_sum <- rowSums(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus[1:38])
+
+alleles_snp_0_female <- data.frame(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_0_sum, sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_0_sum)
+colnames(alleles_snp_0_female) <- c("allele_1", "allele_2")
+alleles_snp_1_female <- data.frame(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1_sum, sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1_sum)
+colnames(alleles_snp_1_female) <- c("allele_1", "allele_2")
+alleles_snp_2_5_female <- data.frame(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5_sum, sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5_sum)
+colnames(alleles_snp_2_5_female) <- c("allele_1", "allele_2")
+alleles_snp_5plus_female <- data.frame(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus_sum, sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus_sum)
+colnames(alleles_snp_5plus_female) <- c("allele_1", "allele_2")
+
+SNPs <- factor(rep(c("nonallelic"), c(nrow(alleles_snp_0_female))))
+alleles_snp_0_female$SNPs <- SNPs
+SNPs <- factor(rep(c("1"), c(nrow(alleles_snp_1_female))))
+alleles_snp_1_female$SNPs <- SNPs
+SNPs <- factor(rep(c("2-5"), c(nrow(alleles_snp_2_5_female))))
+alleles_snp_2_5_female$SNPs <- SNPs
+SNPs <- factor(rep(c("5+"), c(nrow(alleles_snp_5plus_female))))
+alleles_snp_5plus_female$SNPs <- SNPs
+
+alleles_snps_female <- rbind(alleles_snp_1_female, alleles_snp_2_5_female, alleles_snp_5plus_female)
+alleles_snps_female$ratio <- alleles_snps_female$allele_1/(alleles_snps_female$allele_2+ alleles_snps_female$allele_1)
+alleles_snps_sr_female <- alleles_snps_female[!is.na(alleles_snps_female$ratio),]
+
+saveRDS(alleles_snps_sr_female, "~/sr_alleles_snps_female.rds")
+
+# allelic/nonallelic
+alleles_nonallelic_sr_female <- rbind(alleles_snp_0_female, alleles_snp_1_female, alleles_snp_2_5_female, alleles_snp_5plus_female)
+
+saveRDS(alleles_nonallelic_sr_female, "~/alleles_nonallelic_sr_female.rds")
+```
+
+
+## allelic male
+```{r}
+# sort for gender SCE
+sce_sr_hipsci_df_allelic_male <- sce_sr_hipsci_df_allelic[,colData(sce_sr_hipsci_df_allelic)$gender == "male"]
+colData(sce_sr_hipsci_df_allelic_male)$gender
+rownames(sce_sr_hipsci_df_allelic_male) <- rownames(sce_sr_hipsci_df_allelic)
+unfiltered <- sce_sr_hipsci_df_allelic_male
+stats_sce_sr_hipsci_df_allelic_male <- perCellQCMetrics(sce_sr_hipsci_df_allelic_male)
+qc <- quickPerCellQC(stats_sce_sr_hipsci_df_allelic_male, percent_subsets=c("altexps_ERCC_percent"))
+sce_sr_hipsci_df_allelic_male <- sce_sr_hipsci_df_allelic_male[,!qc$discard]
+colSums(as.matrix(qc))
+
+# Remove genes that are not expressed
+sce_sr_hipsci_df_allelic_male <- sce_sr_hipsci_df_allelic_male[Matrix::rowSums(counts(sce_sr_hipsci_df_allelic_male)) > 0,]
+sce_sr_hipsci_df_allelic_male <- scater::addPerFeatureQC(sce_sr_hipsci_df_allelic_male)
+rowData(sce_sr_hipsci_df_allelic_male)
+
+# Normalization.
+sce_sr_hipsci_df_allelic_male <- computeSpikeFactors(sce_sr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_male))
+sce_sr_hipsci_df_allelic_male <- logNormCounts(sce_sr_hipsci_df_allelic_male)
+
+# allele1
+sce_sr_hipsci_df_allelic_male <- swapAltExp(sce_sr_hipsci_df_allelic_male, "allele_1", saved="original")
+sce_sr_hipsci_df_allelic_male <- computeSpikeFactors(sce_sr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_male))
+sce_sr_hipsci_df_allelic_male <- logNormCounts(sce_sr_hipsci_df_allelic_male)
+stats_sce_sr_hipsci_df_allelic_male_allele_1 <- perCellQCMetrics(sce_sr_hipsci_df_allelic_male)
+sr_allele_1_male_libsize <- stats_sce_sr_hipsci_df_allelic_male_allele_1$sum
+sce_sr_hipsci_df_allelic_male_allele1_df <- data.frame(as.matrix(logcounts(sce_sr_hipsci_df_allelic_male)))
+
+# allele2
+sce_sr_hipsci_df_allelic_male <- swapAltExp(sce_sr_hipsci_df_allelic_male, "allele_2", saved="original")
+stats_sce_sr_hipsci_df_allelic_male_allele2 <- perCellQCMetrics(sce_sr_hipsci_df_allelic_male)
+sce_sr_hipsci_df_allelic_male <- computeSpikeFactors(sce_sr_hipsci_df_allelic_male, "ERCC")
+summary(sizeFactors(sce_sr_hipsci_df_allelic_male))
+sce_sr_hipsci_df_allelic_male <- logNormCounts(sce_sr_hipsci_df_allelic_male)
+sr_allele_2_male_libsize <- stats_sce_sr_hipsci_df_allelic_male_allele2$sum
+
+sce_sr_hipsci_df_allelic_male_allele2_df <- data.frame(as.matrix(logcounts(sce_sr_hipsci_df_allelic_male)))
+
+rownames(sce_sr_hipsci_df_allelic_male_allele2_df) -> sce_sr_hipsci_df_allelic_male_allele2_df$genes 
+rownames(sce_sr_hipsci_df_allelic_male_allele1_df) -> sce_sr_hipsci_df_allelic_male_allele1_df$genes
+rownames(sce_sr_hipsci_df_allelic_male_allele2_df) <- sce_sr_hipsci_df_allelic_male_allele2_df$genes
+rownames(sce_sr_hipsci_df_allelic_male_allele1_df) <- sce_sr_hipsci_df_allelic_male_allele1_df$genes
+
+sce_sr_hipsci_df_allelic_male_allele2_df <- left_join(sce_sr_hipsci_df_allelic_male_allele2_df, SNPs_euts1_gene_ordered_filtered)
+sce_sr_hipsci_df_allelic_male_allele2_df[is.na(sce_sr_hipsci_df_allelic_male_allele2_df)] <- 0
+sce_sr_hipsci_df_allelic_male_allele1_df <- left_join(sce_sr_hipsci_df_allelic_male_allele1_df, SNPs_euts1_gene_ordered_filtered)
+sce_sr_hipsci_df_allelic_male_allele1_df[is.na(sce_sr_hipsci_df_allelic_male_allele1_df)] <- 0
+
+rownames(sce_sr_hipsci_df_allelic_male_allele1_df) <- sce_sr_hipsci_df_allelic_male_allele1_df$genes
+rownames(sce_sr_hipsci_df_allelic_male_allele2_df) <- sce_sr_hipsci_df_allelic_male_allele2_df$genes
+
+sce_sr_hipsci_df_allelic_male_allele1_df$ensembl_gene_id <- rownames(sce_sr_hipsci_df_allelic_male_allele1_df)
+sce_sr_hipsci_df_allelic_male_allele2_df$ensembl_gene_id <- rownames(sce_sr_hipsci_df_allelic_male_allele2_df)
+
+allelic_features <- rownames(sce_sr_hipsci_df_allelic_male_allele2_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+
+sce_sr_hipsci_df_allelic_male_allele2_df_features <- left_join(sce_sr_hipsci_df_allelic_male_allele2_df, genes)
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX <- sce_sr_hipsci_df_allelic_male_allele2_df_features[grep("[0-9]", sce_sr_hipsci_df_allelic_male_allele2_df_features$chromosome_name),]
+
+allelic_features <- rownames(sce_sr_hipsci_df_allelic_male_allele1_df)
+
+genes = getBM(attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "hgnc_symbol"), filters="ensembl_gene_id", values=allelic_features, mart=human_annotation, useCache = FALSE)
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features <- left_join(sce_sr_hipsci_df_allelic_male_allele1_df, genes)
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX <- sce_sr_hipsci_df_allelic_male_allele1_df_features[grep("[0-9]", sce_sr_hipsci_df_allelic_male_allele1_df_features$chromosome_name),]
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_0 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs==0,]
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs==1,]
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs<5) & (sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs>1),]
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs>5,]
+
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_0 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs==0,]
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs==1,]
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs<5) & (sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs>1),]
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs>5,]
+
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_0_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_0[1:40])
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1[1:40])
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5[1:40])
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus[1:40])
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_0_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_0[1:40])
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1[1:40])
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5[1:40])
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus_sum <- rowSums(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus[1:40])
+
+alleles_snp_0_male <- data.frame(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_0_sum, sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_0_sum)
+colnames(alleles_snp_0_male) <- c("allele_1", "allele_2")
+alleles_snp_1_male <- data.frame(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1_sum, sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1_sum)
+colnames(alleles_snp_1_male) <- c("allele_1", "allele_2")
+alleles_snp_2_5_male <- data.frame(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5_sum, sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5_sum)
+colnames(alleles_snp_2_5_male) <- c("allele_1", "allele_2")
+alleles_snp_5plus_male <- data.frame(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus_sum, sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus_sum)
+colnames(alleles_snp_5plus_male) <- c("allele_1", "allele_2")
+
+SNPs <- factor(rep(c("nonallelic"), c(nrow(alleles_snp_0_male))))
+alleles_snp_0_male$SNPs <- SNPs
+SNPs <- factor(rep(c("1"), c(nrow(alleles_snp_1_male))))
+alleles_snp_1_male$SNPs <- SNPs
+SNPs <- factor(rep(c("2-5"), c(nrow(alleles_snp_2_5_male))))
+alleles_snp_2_5_male$SNPs <- SNPs
+SNPs <- factor(rep(c("5+"), c(nrow(alleles_snp_5plus_male))))
+alleles_snp_5plus_male$SNPs <- SNPs
+
+alleles_snps_male <- rbind(alleles_snp_1_male, alleles_snp_2_5_male, alleles_snp_5plus_male)
+alleles_snps_male$ratio <- alleles_snps_male$allele_1/(alleles_snps_male$allele_2+ alleles_snps_male$allele_1)
+alleles_snps_sr_male <- alleles_snps_male[!is.na(alleles_snps_male$ratio),]
+
+saveRDS(alleles_snps_sr_male, "~/sr_alleles_snps_male.rds")
+
+# allelic/nonallelic
+alleles_nonallelic_sr_male <- rbind(alleles_snp_0_male, alleles_snp_1_male, alleles_snp_2_5_male, alleles_snp_5plus_male)
+
+saveRDS(alleles_nonallelic_sr_male, "~/alleles_nonallelic_sr_male.rds")
+```
+
+## female allelic genes per cell per SNP
+```{r}
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_nonallelic <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_nonallelic[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_nonallelic <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_nonallelic[1:38], 2, function(c)sum(c!=0)))
+nonallelic_genes_expressed <- nonallelic_genes_expressed_allele_1 + nonallelic_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_1[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_1[1:38], 2, function(c)sum(c!=0)))
+SNP_1_genes_expressed <- SNP_1_genes_expressed_allele_1 + SNP_1_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2[1:38], 2, function(c)sum(c!=0)))
+SNP_2_genes_expressed <- SNP_2_genes_expressed_allele_1 + SNP_2_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_3 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_3[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_3 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_3[1:38], 2, function(c)sum(c!=0)))
+SNP_3_genes_expressed <- SNP_3_genes_expressed_allele_1 + SNP_3_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_4 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_4[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_4 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_4[1:38], 2, function(c)sum(c!=0)))
+SNP_4_genes_expressed <- SNP_4_genes_expressed_allele_1 + SNP_4_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5[1:38], 2, function(c)sum(c!=0)))
+SNP_5_genes_expressed <- SNP_5_genes_expressed_allele_1 + SNP_5_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs > 1 & sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_2_5[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs > 1 & sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_2_5[1:38], 2, function(c)sum(c!=0)))
+SNP_2_5_genes_expressed <- SNP_2_5_genes_expressed_allele_1 + SNP_2_5_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_female_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele1_df_features_noX_5plus[1:38], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_female_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_female_allele2_df_features_noX_5plus[1:38], 2, function(c)sum(c!=0)))
+SNP_5plus_genes_expressed <- SNP_5plus_genes_expressed_allele_1 + SNP_5plus_genes_expressed_allele_2
+
+number_genes_expressed_per_SNP_sr_female_small <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_genes_expressed,SNP_3_genes_expressed, SNP_4_genes_expressed, SNP_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_sr_female_small) <- c("0", "1", "2", "3", "4", "5", "5+")
+number_genes_expressed_per_SNP_sr_female_small_melt <- melt(number_genes_expressed_per_SNP_sr_female_small)
+
+number_genes_expressed_per_SNP_sr_female <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_sr_female) <- c("0", "1", "2_5", "5+")
+number_genes_expressed_per_SNP_sr_female_melt <- melt(number_genes_expressed_per_SNP_sr_female)
+#saveRDS(number_genes_expressed_per_SNP_sr_female_melt, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/number_genes_expressed_per_SNP_sr_female_melt.rds")
+
+# control by libsize
+number_genes_expressed_per_SNP_sr_female
+sr_female_libsize <- sr_allele_2_female_libsize + sr_allele_1_female_libsize
+number_genes_expressed_per_SNP_sr_female_libsize <- number_genes_expressed_per_SNP_sr_female/sr_female_libsize*100
+number_genes_expressed_per_SNP_sr_female_libsize_melt <- melt(number_genes_expressed_per_SNP_sr_female_libsize)
+
+number_genes_expressed_per_SNP_sr_female_small
+number_genes_expressed_per_SNP_sr_female_small_libsize <- number_genes_expressed_per_SNP_sr_female_small[1:7]/sr_female_libsize*100
+number_genes_expressed_per_SNP_sr_female_small_libsize_melt <- melt(number_genes_expressed_per_SNP_sr_female_small_libsize)
+
+```
+
+## male allelic genes per cell per SNP
+```{r}
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_nonallelic <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_nonallelic[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_nonallelic <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 0), ]
+nonallelic_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_nonallelic[1:40], 2, function(c)sum(c!=0)))
+nonallelic_genes_expressed <- nonallelic_genes_expressed_allele_1 + nonallelic_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_1[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 1 ), ]
+SNP_1_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_1[1:40], 2, function(c)sum(c!=0)))
+SNP_1_genes_expressed <- SNP_1_genes_expressed_allele_1 + SNP_1_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 2 ), ]
+SNP_2_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2[1:40], 2, function(c)sum(c!=0)))
+SNP_2_genes_expressed <- SNP_2_genes_expressed_allele_1 + SNP_2_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_3 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_3[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_3 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 3 ), ]
+SNP_3_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_3[1:40], 2, function(c)sum(c!=0)))
+SNP_3_genes_expressed <- SNP_3_genes_expressed_allele_1 + SNP_3_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_4 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_4[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_4 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 4 ), ]
+SNP_4_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_4[1:40], 2, function(c)sum(c!=0)))
+SNP_4_genes_expressed <- SNP_4_genes_expressed_allele_1 + SNP_4_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs == 5 ), ]
+SNP_5_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5[1:40], 2, function(c)sum(c!=0)))
+SNP_5_genes_expressed <- SNP_5_genes_expressed_allele_1 + SNP_5_genes_expressed_allele_2
+
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs > 1 & sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_2_5[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5 <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs > 1 & sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs <= 5), ]
+SNP_2_5_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_2_5[1:40], 2, function(c)sum(c!=0)))
+SNP_2_5_genes_expressed <- SNP_2_5_genes_expressed_allele_1 + SNP_2_5_genes_expressed_allele_2
+
+sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_male_allele1_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_1 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele1_df_features_noX_5plus[1:40], 2, function(c)sum(c!=0)))
+sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus <- sce_sr_hipsci_df_allelic_male_allele2_df_features_noX[(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX$SNPs > 5), ]
+SNP_5plus_genes_expressed_allele_2 <- data.frame(apply(sce_sr_hipsci_df_allelic_male_allele2_df_features_noX_5plus[1:40], 2, function(c)sum(c!=0)))
+SNP_5plus_genes_expressed <- SNP_5plus_genes_expressed_allele_1 + SNP_5plus_genes_expressed_allele_2
+
+
+number_genes_expressed_per_SNP_sr_male <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_sr_male) <- c("0", "1", "2_5", "5+")
+number_genes_expressed_per_SNP_sr_male_melt <- melt(number_genes_expressed_per_SNP_sr_male)
+#saveRDS(number_genes_expressed_per_SNP_sr_male_melt, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/number_genes_expressed_per_SNP_sr_male_melt.rds")
+
+number_genes_expressed_per_SNP_sr_male_small <- cbind(nonallelic_genes_expressed, SNP_1_genes_expressed, SNP_2_genes_expressed,SNP_3_genes_expressed, SNP_4_genes_expressed, SNP_5_genes_expressed, SNP_5plus_genes_expressed)
+colnames(number_genes_expressed_per_SNP_sr_male_small) <- c("0", "1", "2", "3", "4", "5", "5+")
+number_genes_expressed_per_SNP_sr_male_small_melt <- melt(number_genes_expressed_per_SNP_sr_male_small)
+
+# control by libsize
+sr_male_libsize <- sr_allele_2_male_libsize + sr_allele_1_male_libsize
+number_genes_expressed_per_SNP_sr_male_libsize <- number_genes_expressed_per_SNP_sr_male/sr_male_libsize*100
+number_genes_expressed_per_SNP_sr_male_libsize_melt <- melt(number_genes_expressed_per_SNP_sr_male_libsize)
+
+number_genes_expressed_per_SNP_sr_male_small_libsize <- number_genes_expressed_per_SNP_sr_male_small[1:7]/sr_male_libsize*100
+number_genes_expressed_per_SNP_sr_male_small_libsize_melt <- melt(number_genes_expressed_per_SNP_sr_male_small_libsize)
+
+```
+
+
+# combine gender
+```{r}
+alleles_snps_sr_both_genders <- rbind(alleles_snps_sr_male, alleles_snps_sr_female)
+alleles_nonallelic_sr_both_genders <- rbind(alleles_nonallelic_sr_male, alleles_nonallelic_sr_female)
+alleles_nonallelic_sr_both_genders_melt <- melt(alleles_nonallelic_sr_both_genders)
+
+number_genes_expressed_per_SNP_sr_both_genders <- rbind(number_genes_expressed_per_SNP_sr_male, number_genes_expressed_per_SNP_sr_female)
+number_genes_expressed_per_SNP_sr_both_genders_melt <- melt(number_genes_expressed_per_SNP_sr_both_genders)
+saveRDS(number_genes_expressed_per_SNP_sr_both_genders_melt, "~/number_genes_expressed_per_SNP_sr_both_genders_melt.rds")
+
+number_genes_expressed_per_SNP_sr_both_genders_small <- rbind(number_genes_expressed_per_SNP_sr_male_small, number_genes_expressed_per_SNP_sr_female_small)
+number_genes_expressed_per_SNP_sr_both_genders_small_melt <- melt(number_genes_expressed_per_SNP_sr_both_genders_small)
+
+```
+
+
+# combining short and long read data
+```{r}
+length <- factor(rep(c("short"), c(nrow(alleles_snps_sr_both_genders))))
+alleles_snps_sr_both_genders$length <- length
+length <- factor(rep(c("long"), c(nrow(alleles_snps_lr_both_genders))))
+alleles_snps_lr_both_genders$length <- length
+alleles_snps_lr_both_genders_combined <- rbind(alleles_snps_lr_both_genders, alleles_snps_sr_both_genders)
+saveRDS(alleles_snps_lr_both_genders_combined, "~/alleles_snps_lr_both_genders_combined.rds")
+
+
+length <- factor(rep(c("long"), c(nrow(number_genes_expressed_per_SNP_lr_both_genders))))
+number_genes_expressed_per_SNP_lr_both_genders$length <- length
+number_genes_expressed_per_SNP_lr_both_genders_ratio <- number_genes_expressed_per_SNP_lr_both_genders/number_genes_expressed_per_SNP_lr_both_genders$`0`
+number_genes_expressed_per_SNP_lr_both_genders_ratio$length <- length
+
+length <- factor(rep(c("short"), c(nrow(number_genes_expressed_per_SNP_sr_both_genders))))
+number_genes_expressed_per_SNP_sr_both_genders$length <- length
+number_genes_expressed_per_SNP_sr_both_genders_ratio <- number_genes_expressed_per_SNP_sr_both_genders/number_genes_expressed_per_SNP_sr_both_genders$`0`
+number_genes_expressed_per_SNP_sr_both_genders_ratio$length <- length
+
+
+number_genes_expressed_per_SNP_both_genders_combined <- rbind(number_genes_expressed_per_SNP_lr_both_genders, number_genes_expressed_per_SNP_sr_both_genders)
+number_genes_expressed_per_SNP_both_genders_combined_melt <- melt(number_genes_expressed_per_SNP_both_genders_combined)
+
+number_genes_expressed_per_SNP_both_genders_combined_ratio <- rbind(number_genes_expressed_per_SNP_lr_both_genders_ratio, number_genes_expressed_per_SNP_sr_both_genders_ratio)
+number_genes_expressed_per_SNP_both_genders_combined_ratio_melt <- melt(number_genes_expressed_per_SNP_both_genders_combined_ratio)
+
+
+saveRDS(number_genes_expressed_per_SNP_both_genders_combined_melt, "~/number_genes_expressed_per_SNP_both_genders_combined_melt.rds")
+
+
+number_genes_expressed_per_SNP_sr_both_genders_small
+length <- factor(rep(c("long"), c(nrow(number_genes_expressed_per_SNP_sr_both_genders_small))))
+number_genes_expressed_per_SNP_sr_both_genders_small$length <- length
+number_genes_expressed_per_SNP_lr_both_genders_small
+length <- factor(rep(c("short"), c(nrow(number_genes_expressed_per_SNP_lr_both_genders_small))))
+number_genes_expressed_per_SNP_lr_both_genders_small$length <- length
+number_genes_expressed_per_SNP_both_genders_small_combined <- rbind(number_genes_expressed_per_SNP_lr_both_genders_small, number_genes_expressed_per_SNP_sr_both_genders_small)
+number_genes_expressed_per_SNP_both_genders_small_combined_melt <- melt(number_genes_expressed_per_SNP_both_genders_small_combined)
+saveRDS(number_genes_expressed_per_SNP_both_genders_small_combined_melt, "~/number_genes_expressed_per_SNP_both_genders_small_combined_melt.rds")
+
+number_genes_expressed_per_SNP_lr_female_small
+length <- factor(rep(c("long"), c(nrow(number_genes_expressed_per_SNP_lr_female_small))))
+number_genes_expressed_per_SNP_lr_female_small$length <- length
+number_genes_expressed_per_SNP_sr_female_small
+length <- factor(rep(c("short"), c(nrow(number_genes_expressed_per_SNP_sr_female_small))))
+number_genes_expressed_per_SNP_sr_female_small$length <- length
+number_genes_expressed_per_SNP_female_small_combined <- rbind(number_genes_expressed_per_SNP_lr_female_small, number_genes_expressed_per_SNP_sr_female_small)
+number_genes_expressed_per_SNP_female_small_combined_melt <- melt(number_genes_expressed_per_SNP_female_small_combined)
+saveRDS(number_genes_expressed_per_SNP_female_small_combined_melt, "~/number_genes_expressed_per_SNP_female_small_combined_melt.rds")
+
+number_genes_expressed_per_SNP_lr_male_small
+length <- factor(rep(c("long"), c(nrow(number_genes_expressed_per_SNP_lr_male_small))))
+number_genes_expressed_per_SNP_lr_male_small$length <- length
+number_genes_expressed_per_SNP_sr_male_small
+length <- factor(rep(c("short"), c(nrow(number_genes_expressed_per_SNP_sr_male_small))))
+number_genes_expressed_per_SNP_sr_male_small$length <- length
+number_genes_expressed_per_SNP_male_small_combined <- rbind(number_genes_expressed_per_SNP_lr_male_small, number_genes_expressed_per_SNP_sr_male_small)
+number_genes_expressed_per_SNP_male_small_combined_melt <- melt(number_genes_expressed_per_SNP_male_small_combined)
+saveRDS(number_genes_expressed_per_SNP_male_small_combined_melt, "~/number_genes_expressed_per_SNP_male_small_combined_melt.rds")
+
+```
+
+

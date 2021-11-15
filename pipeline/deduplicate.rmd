@@ -54,7 +54,7 @@ We rename the reads for consistency with the consensus step, following the forma
 
 ```{r}
 varnames <- c("ConsRead")
-names(cons.out) <- paste0(INDEX, "_", varnames, "_", CHUNK, "_", seq_along(cons.out))
+names(read.seq) <- paste0(INDEX, "_", varnames, "_", CHUNK, "_", seq_along(read.seq))
 
 read.seq
 ```

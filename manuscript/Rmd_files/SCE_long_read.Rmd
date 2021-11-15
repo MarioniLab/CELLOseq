@@ -1,0 +1,438 @@
+---
+title: "SCE_long_reads"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/SCE_long_reads.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r include=FALSE}
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+library(stringr)
+library(biomaRt)
+library(SingleCellExperiment)
+library(scRNAseq)
+library(tidyverse)
+rm(list=ls())
+```
+
+
+# Read in the long read hipsci data
+FLAIR does not always assign reads correctly to TEs, therefore we have generated read files overlapping to TEs using bed intersect with a costum script for each mouse and human TEs. We also processed TEs on whether they are nested or not nested repeats based on UCSC table browser annotation.
+
+```{r, include=FALSE}
+counts_lr = read.table("corrected_flair_quantify.data", header=TRUE, stringsAsFactors = FALSE)
+
+# load in repeat names for nested TEs according to UCSC nested TE annotation
+repeat_isoforms_readnames_nested <- read.csv("~/fixed_isoform_readnames_nested.txt",header=F, sep=";", stringsAsFactors = FALSE)
+
+# load in repeat names for not nested TEs according to UCSC nested TE annotation
+repeat_isoforms_readnames_not_nested <- read.csv("~/fixed_isoform_readnames_not_nested.txt",header=F, sep=";", stringsAsFactors = FALSE)
+
+# load in repeat read names according to flair
+repeat_readnames <- read.delim("~/repeat_readnames.txt", header=F, sep=";", stringsAsFactors = FALSE)
+```
+
+# rename reads to repeats or repeat_isoforms 
+```{r}
+# assign unique TEs
+counts_lr$rows <- counts_lr$ids
+counts_lr$ids <- gsub("\\-1\\_","\\_", counts_lr$ids)
+counts_lr$ids <- gsub("\\_ENSG\\d+\\.\\d+","", counts_lr$ids)
+counts_lr$ids <- gsub("\\_chr\\d+\\:\\d+","", counts_lr$ids)
+counts_lr$ids <- gsub("\\_chr[X,Y,M]\\:\\d+","", counts_lr$ids)
+
+# repeats
+# known repeats in GTF
+counts_lr_repeats <- counts_lr[grep("ConsRead\\_\\d+\\_\\d+\\_barcode\\_\\d+\\_",counts_lr$ids),]
+counts_lr_repeats$ids <- gsub("ConsRead\\_\\d+\\_\\d+\\_barcode\\_\\d+\\_", "",counts_lr_repeats$ids)
+counts_lr_repeats <- counts_lr_repeats[!grepl("ERCC",counts_lr_repeats$ids),]
+counts_lr_repeats_readnames <- data.frame(counts_lr_repeats$rows, counts_lr_repeats$ids, stringsAsFactors = FALSE)
+counts_lr_repeats_readnames$chr_start_end <-  str_extract(counts_lr_repeats_readnames$counts_lr_repeats.ids, 'chr.*')
+colnames(counts_lr_repeats_readnames) <- c("ids","repeat_ids", "chr_start_end")
+counts_lr_repeats_readnames_unique <- counts_lr_repeats_readnames[!duplicated(counts_lr_repeats_readnames[,c("repeat_ids")]),]
+
+# bed intersect to find more repeats not found by flair
+repeat_readnames$V2 <- gsub(" ","", repeat_readnames$V2)
+repeat_readnames <- repeat_readnames[1:2]
+repeat_readnames$chr_start_end <-  str_extract(repeat_readnames$V2, 'chr.*')
+colnames(repeat_readnames) <- c("ids", "repeat_ids","chr_start_end")
+repeat_readnames_duplicate <- repeat_readnames[duplicated(repeat_readnames[,c("repeat_ids")]),]
+repeat_readnames_unique <- repeat_readnames[!duplicated(repeat_readnames[,c("repeat_ids")]),]
+
+# combine known, nested and non nested
+repeat_readnames_all <- rbind(counts_lr_repeats_readnames_unique, repeat_readnames_unique) 
+repeat_readnames_all_duplicate <- repeat_readnames_all[duplicated(repeat_readnames_all[,c("repeat_ids")]),]
+repeat_readnames_all <- repeat_readnames_all[!duplicated(repeat_readnames_all[,c("repeat_ids")]),]
+
+#repeat_isoforms
+# not nested
+colnames(repeat_isoforms_readnames_not_nested) <- c("ids", "repeat_isoform_ids")
+repeat_isoforms_readnames_not_nested <- repeat_isoforms_readnames_not_nested[1:2]
+repeat_isoforms_readnames_not_nested_unique <- repeat_isoforms_readnames_not_nested[!duplicated(repeat_isoforms_readnames_not_nested$ids),]
+
+#nested
+colnames(repeat_isoforms_readnames_nested) <- c("ids", "repeat_isoform_ids")
+repeat_isoforms_readnames_nested <- repeat_isoforms_readnames_nested[1:2]
+repeat_isoforms_readnames_nested_unique <- repeat_isoforms_readnames_nested[!duplicated(repeat_isoforms_readnames_nested[,c("repeat_isoform_ids")]),]
+
+# combine nested and non nested
+repeat_isoforms_readnames <- rbind(repeat_isoforms_readnames_nested_unique, repeat_isoforms_readnames_not_nested_unique)
+
+# merge counts matrix with repeat_isoform_aggregate
+counts_lr_repeat_isoforms_merged <- counts_lr %>% dplyr::left_join(repeat_isoforms_readnames) %>% dplyr::left_join(repeat_readnames_all)
+
+# join 2 dataframes
+counts_lr_repeat_isoforms_merged$ids <- ifelse(!is.na(counts_lr_repeat_isoforms_merged$repeat_isoform_ids), counts_lr_repeat_isoforms_merged$repeat_isoform_ids, counts_lr_repeat_isoforms_merged$ids)
+counts_lr_repeat_isoforms_merged$ids <- ifelse(!is.na(counts_lr_repeat_isoforms_merged$repeat_ids), counts_lr_repeat_isoforms_merged$repeat_ids, counts_lr_repeat_isoforms_merged$ids)
+
+# assign repeat or repeat_isoform
+counts_lr_repeat_isoforms_merged$source = ifelse(!is.na(counts_lr_repeat_isoforms_merged$repeat_isoform_ids), "repeat_isoform", ifelse(!is.na(counts_lr_repeat_isoforms_merged$repeat_ids), "repeat", "genic"))
+counts_lr_repeat_isoforms_merged_unique <- with(counts_lr_repeat_isoforms_merged, ave(as.character(rows), ids, FUN = make.unique))
+counts_lr_repeat_isoforms_merged$rows <- counts_lr_repeat_isoforms_merged_unique
+counts_lr_repeat_isoforms_merged_repeats <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "repeat",]
+saveRDS(counts_lr_repeat_isoforms_merged_repeats, "~/counts_lr_repeat_isoforms_merged_repeats.rds")
+```
+
+
+# make dataframe for repeats, ERCC, repeat_isoform and genes
+```{r}
+# changing names
+counts_lr_repeat_isoforms_merged$names <- counts_lr_repeat_isoforms_merged$rows
+
+# rename
+counts_lr_repeat_isoforms_merged$rows <- gsub("ConsRead\\_\\d+\\_\\d+_barcode[\\_\\-]\\d+\\_","", counts_lr_repeat_isoforms_merged$rows)
+
+#ERCC
+counts_lr_repeat_isoforms_ERCC <- counts_lr_repeat_isoforms_merged[grep("ERCC",counts_lr_repeat_isoforms_merged$rows),]
+
+# filter our duplicates
+sum(duplicated(counts_lr_repeat_isoforms_ERCC$rows))
+
+# collate
+counts_lr_repeat_isoforms_ERCC <- rowsum(as.matrix(counts_lr_repeat_isoforms_ERCC[2:97]), counts_lr_repeat_isoforms_ERCC$rows)
+dim(counts_lr_repeat_isoforms_ERCC)
+
+# add column to matrix with type
+type <- rep("ERCC", nrow(counts_lr_repeat_isoforms_ERCC))
+counts_lr_repeat_isoforms_ERCC_df <- counts_lr_repeat_isoforms_ERCC %>% data.frame()
+counts_lr_repeat_isoforms_ERCC_df <- cbind(counts_lr_repeat_isoforms_ERCC_df, type)
+
+#repeats
+counts_lr_repeat_isoforms_repeats <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "repeat",]
+
+# collate
+counts_lr_repeat_isoforms_repeats <- rowsum(as.matrix(counts_lr_repeat_isoforms_repeats[2:97]), counts_lr_repeat_isoforms_repeats$ids)
+dim(counts_lr_repeat_isoforms_repeats)
+
+# add column to matrix with type
+type <- rep("repeats", nrow(counts_lr_repeat_isoforms_repeats))
+counts_lr_repeat_isoforms_repeats_df <- counts_lr_repeat_isoforms_repeats %>% data.frame()
+counts_lr_repeat_isoforms_repeats_df <- cbind(counts_lr_repeat_isoforms_repeats_df, type)
+
+#repeat_isoforms
+counts_lr_repeat_isoforms_repeat_isoforms <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "repeat_isoform",]
+
+# filter our duplicates
+sum(duplicated(counts_lr_repeat_isoforms_repeat_isoforms$ids))
+# collate
+counts_lr_repeat_isoforms_repeat_isoforms <- rowsum(as.matrix(counts_lr_repeat_isoforms_repeat_isoforms[2:97]), counts_lr_repeat_isoforms_repeat_isoforms$ids)
+dim(counts_lr_repeat_isoforms_repeat_isoforms)
+
+# add column to matrix with type
+type <- rep("repeat_isoforms", nrow(counts_lr_repeat_isoforms_repeat_isoforms))
+counts_lr_repeat_isoforms_repeat_isoforms_df <- counts_lr_repeat_isoforms_repeat_isoforms %>% data.frame()
+counts_lr_repeat_isoforms_repeat_isoforms_df <- cbind(counts_lr_repeat_isoforms_repeat_isoforms_df, type)
+
+# known_isoform
+counts_lr_repeat_isoforms_repeat_isoform <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "genic",]
+counts_lr_repeat_isoforms_repeat_isoform_known <- counts_lr_repeat_isoforms_repeat_isoform[grep("ENST",counts_lr_repeat_isoforms_repeat_isoform$rows),]
+
+# collate
+counts_lr_repeat_isoforms_repeat_isoform_known <- rowsum(as.matrix(counts_lr_repeat_isoforms_repeat_isoform_known[2:97]), counts_lr_repeat_isoforms_repeat_isoform_known$rows)
+dim(counts_lr_repeat_isoforms_repeat_isoform_known)
+
+# add column to matrix with type
+type <- rep("known_isoform", nrow(counts_lr_repeat_isoforms_repeat_isoform_known))
+counts_lr_repeat_isoforms_repeat_isoform_known_df <- counts_lr_repeat_isoforms_repeat_isoform_known %>% data.frame()
+counts_lr_repeat_isoforms_repeat_isoform_known_df <- cbind(counts_lr_repeat_isoforms_repeat_isoform_known_df, type)
+
+# novel_isoform
+counts_lr_repeat_isoforms_repeat_isoform <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "genic",]
+counts_lr_repeat_isoforms_repeat_isoform_novel <- counts_lr_repeat_isoforms_repeat_isoform[grep("^ENSG",counts_lr_repeat_isoforms_repeat_isoform$rows),]
+
+# collate
+counts_lr_repeat_isoforms_repeat_isoform_novel <- rowsum(as.matrix(counts_lr_repeat_isoforms_repeat_isoform_novel[2:97]), counts_lr_repeat_isoforms_repeat_isoform_novel$rows)
+dim(counts_lr_repeat_isoforms_repeat_isoform_novel)
+
+# add column to matrix with type
+type <- rep("novel_isoform", nrow(counts_lr_repeat_isoforms_repeat_isoform_novel))
+counts_lr_repeat_isoforms_repeat_isoform_novel_df <- counts_lr_repeat_isoforms_repeat_isoform_novel %>% data.frame()
+counts_lr_repeat_isoforms_repeat_isoform_novel_df <- cbind(counts_lr_repeat_isoforms_repeat_isoform_novel_df, type)
+
+# genic
+# select only genic
+counts_lr_repeat_isoforms_repeat_genic <- counts_lr_repeat_isoforms_merged[counts_lr_repeat_isoforms_merged$source == "genic",]
+counts_lr_repeat_isoforms_repeat_genic <- counts_lr_repeat_isoforms_repeat_genic[grep("ENSG",counts_lr_repeat_isoforms_repeat_genic$rows),]
+
+# collate
+counts_lr_repeat_isoforms_repeat_genic <- rowsum(as.matrix(counts_lr_repeat_isoforms_repeat_genic[2:97]), counts_lr_repeat_isoforms_repeat_genic$rows)
+dim(counts_lr_repeat_isoforms_repeat_genic)
+
+# add column to matrix with type
+type <- rep("genic", nrow(counts_lr_repeat_isoforms_repeat_genic))
+counts_lr_repeat_isoforms_repeat_genic_df <- counts_lr_repeat_isoforms_repeat_genic %>% data.frame()
+counts_lr_repeat_isoforms_repeat_genic_df <- cbind(counts_lr_repeat_isoforms_repeat_genic_df, type)
+
+#merge all dataframes
+counts_lr_combined_df <- rbind(counts_lr_repeat_isoforms_repeat_genic_df, counts_lr_repeat_isoforms_ERCC_df, counts_lr_repeat_isoforms_repeat_isoforms_df, counts_lr_repeat_isoforms_repeats_df)
+saveRDS(counts_lr_combined_df, "~/counts_lr_combined_genic_df.rds")
+
+counts_lr_combined_isoforms_df <- rbind(counts_lr_repeat_isoforms_repeat_isoform_novel_df, counts_lr_repeat_isoforms_repeat_isoform_known_df, counts_lr_repeat_isoforms_ERCC_df, counts_lr_repeat_isoforms_repeat_isoforms_df, counts_lr_repeat_isoforms_repeats_df)
+saveRDS(counts_lr_combined_isoforms_df, "~/counts_lr_combined_isoforms_df.rds")
+```
+
+
+# build single cell experiment for genes
+```{r}
+# Form a sce 
+count_cols = grepl("barcode_", colnames(counts_lr_combined_df))
+sce_lr <- SingleCellExperiment(assays=list(counts=as.matrix(counts_lr_combined_df[, count_cols])))
+
+# define feature names in feature_symbol column
+rowData(sce_lr)$feature_symbol <- rowData(sce_lr)$rows
+rowData(sce_lr) = counts_lr_combined_df[, !count_cols]
+
+# define spike in data
+is.spike <- rowData(sce_lr)$value == "ERCC"
+sce_lr <- splitAltExps(sce_lr, ifelse(is.spike, "ERCC", "gene"))
+rowData(altExp(sce_lr))$concentration <- runif(nrow(altExp(sce_lr)))
+rowData(altExp(sce_lr))
+
+# Save statistics on these libraries
+cur_stats <- melt(table(colData(sce_lr)$cell_type, colData(sce_lr)$gender))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df <- data.frame(row.names = cur_stats$Var2,
+                       Sample = cur_stats$Var1,
+                       gender = cur_stats$Var2,
+                       n_cells = cur_stats$value)
+```
+
+
+# QC
+```{r}
+unfiltered <- sce_lr
+stats <- perCellQCMetrics(sce_lr)
+qc <- quickPerCellQC(stats, percent_subsets=c("altexps_ERCC_percent"))
+
+colData(sce_lr)$libsize <- stats$sum
+colData(sce_lr)$genes <- stats$detected
+
+sce_lr <- sce_lr[,!qc$discard]
+colSums(as.matrix(qc))
+colData(unfiltered) <- cbind(colData(unfiltered), stats)
+unfiltered$discard <- qc$discard
+
+# Remove genes that are not expressed
+sce_lr <- sce_lr[Matrix::rowSums(counts(sce_lr)) > 0,]
+sce_lr <- scater::addPerFeatureQC(sce_lr)
+rowData(sce_lr)
+
+# Add to stats data frame
+cur_stats <- melt(table(colData(sce_lr)$cell_type))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df$AfterFiltering <-cur_stats$value
+```
+
+# Normalisation
+```{r}
+sce_lr <- computeSpikeFactors(sce_lr, "ERCC")
+summary(sizeFactors(sce_lr))
+sce_lr <- logNormCounts(sce_lr)
+```
+
+# Save statistics on these libraries
+```{r}
+cur_stats <- melt(table(colData(sce_lr)$cell_type, colData(sce_lr)$gender))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df <- data.frame(row.names = cur_stats$Var2,
+                       Sample = cur_stats$Var1,
+                       gender = cur_stats$Var2,
+                       n_cells = cur_stats$value)
+```
+
+# Save at this stage
+```{r}
+saveRDS(sce_lr, "~/SCE_lr_all.rds")
+```
+
+# Save normalized and raw counts for ArrayExpress
+```{r}
+write.table(counts(sce_lr), "~/raw_counts_lr_all.txt")
+write.table(colData(sce_lr), "~/cell_metadata_lr_all.txt")
+write.table(rownames(sce_lr),"~/genes_lr_all.tsv", sep = "\t", row.names = FALSE)
+write.table(rowData(sce_lr), "~/cell_rowdata_lr_all.txt")
+write.table(stats.df, "~/filtering_lr_all.tsv", sep = "\t", row.names = FALSE)
+```
+
+# genes per reads
+```{r}
+sce_lr_genic <- sce_lr[rowData(sce_lr)$value == "genic", ]
+
+unfiltered <- sce_lr_genic
+stats <- perCellQCMetrics(sce_lr_genic)
+qc <- quickPerCellQC(stats, percent_subsets=c("altexps_ERCC_percent"))
+
+colData(sce_lr_genic)$libsize <- stats$sum
+colData(sce_lr_genic)$genes <- stats$detected
+
+saveRDS(sce_lr_genic, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/SCE_lr_genes.rds")
+
+write.table(counts(sce_lr_genic), "~/raw_counts_lr_genes.txt")
+write.table(colData(sce_lr_genic), "~/cell_metadata_lr_genes.txt")
+write.table(rowData(sce_lr_genic), "~/cell_rowdata_lr_genes.txt")
+write.table(rownames(sce_lr_genic),"~/genes_lr_genes.tsv", sep = "\t", row.names = FALSE)
+
+```
+
+# build single cell experiment for isoforms
+```{r}
+# Form a sce 
+count_cols = grepl("barcode_", colnames(counts_lr_combined_isoforms_df))
+sce_lr_isoforms <- SingleCellExperiment(assays=list(counts=as.matrix(counts_lr_combined_isoforms_df[, count_cols])))
+
+#metadata
+genotype <- factor(rep(c("NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "NUFH3", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1", "EUTS1"), c(8)))
+gender <- factor(rep(c("female","female","female","female","female","female", "male", "male", "male", "male", "male", "male"), c(8)))
+colData(sce_lr_isoforms)$cell_type <- genotype
+colData(sce_lr_isoforms)$gender <- gender
+
+# define feature names in feature_symbol column
+rowData(sce_lr_isoforms)$feature_symbol <- rowData(sce_lr_isoforms)$rows
+rowData(sce_lr_isoforms) = counts_lr_combined_isoforms_df[, !count_cols]
+
+# define spike in data
+is.spike <- rowData(sce_lr_isoforms)$value == "ERCC"
+sce_lr_isoforms <- splitAltExps(sce_lr_isoforms, ifelse(is.spike, "ERCC", "gene"))
+rowData(altExp(sce_lr_isoforms))$concentration <- runif(nrow(altExp(sce_lr_isoforms)))
+rowData(altExp(sce_lr_isoforms))
+
+#QC
+unfiltered <- sce_lr_isoforms
+stats <- perCellQCMetrics(sce_lr_isoforms)
+qc <- quickPerCellQC(stats, percent_subsets=c("altexps_ERCC_percent"))
+
+colData(sce_lr_isoforms)$libsize <- stats$sum
+colData(sce_lr_isoforms)$genes <- stats$detected
+sce_lr_isoforms <- sce_lr_isoforms[,!qc$discard]
+
+# Remove isoforms that are not expressed
+sce_lr_isoforms <- sce_lr_isoforms[Matrix::rowSums(counts(sce_lr_isoforms)) > 0,]
+sce_lr_isoforms <- scater::addPerFeatureQC(sce_lr_isoforms)
+rowData(sce_lr_isoforms)
+
+# Normalisation
+sce_lr_isoforms <- computeSpikeFactors(sce_lr_isoforms, "ERCC")
+summary(sizeFactors(sce_lr_isoforms))
+sce_lr_isoforms <- logNormCounts(sce_lr_isoforms)
+
+# save statistics
+cur_stats <- melt(table(colData(sce_lr_isoforms)$cell_type, colData(sce_lr_isoforms)$gender))
+cur_stats <- cur_stats[cur_stats$value > 0,]
+cur_stats <- cur_stats[order(cur_stats$Var1),]
+stats.df <- data.frame(row.names = cur_stats$Var2,
+                       Sample = cur_stats$Var1,
+                       gender = cur_stats$Var2,
+                       n_cells = cur_stats$value)
+
+#save RDS data
+saveRDS(sce_lr_isoforms, "~/SCE_lr_isoforms.rds")
+
+write.table(counts(sce_lr_isoforms), "~/raw_counts_lr_isoform.txt")
+write.table(colData(sce_lr_isoforms), "~/cell_metadata_lr_isoform.txt")
+write.table(rowData(sce_lr_isoforms), "~/cell_rowdata_lr_isoform.txt")
+write.table(rownames(sce_lr_isoforms),"~/genes_lr_isoform.tsv", sep = "\t", row.names = FALSE)
+
+```
+
+# get repeat isoform expression for TES or TSS 
+```{r}
+# read in classification of repeat_isoforms based on strand and location of TE upstream or downstream of protein coding gene
+repeat_isoform_classification <- read.csv("~/repeat_isoform_classification.csv")
+
+repeat_isoforms_readnames_classification <- left_join(repeat_isoforms_readnames, repeat_isoform_classification, by=c("ids"="transcript_name"))
+
+sce_lr_isoforms_repeat <- sce_lr_isoforms[rowData(sce_lr_isoforms)$value == "repeat_isoforms"]
+sce_lr_isoforms_repeat_logcounts <- data.frame(logcounts(sce_lr_isoforms_repeat))
+sce_lr_isoforms_repeat_logcounts$names <- rownames(sce_lr_isoforms_repeat_logcounts)
+
+sce_lr_isoforms_repeat_logcounts_classification <- left_join(sce_lr_isoforms_repeat_logcounts, repeat_isoforms_readnames_classification, by=c("names"="repeat_isoform_ids"))
+
+toMatch <- c("TES", "TSS")
+sce_lr_isoforms_repeat_logcounts_classification <- sce_lr_isoforms_repeat_logcounts_classification[grepl(paste(toMatch,collapse="|"),sce_lr_isoforms_repeat_logcounts_classification$classification),] 
+
+saveRDS(sce_lr_isoforms_repeat_logcounts_classification, "~/sce_lr_isoforms_repeat_logcounts_classification.rds")
+
+repeat_isoforms_readnames_classification$name <- repeat_isoforms_readnames_classification
+```
+
+
+# subset known and novel isoforms by read lengths
+```{r}
+rownames(sce_lr_isoforms)
+toMatch <- c("known_isoform", "novel_isoform")
+sce_lr_isoforms_select <- sce_lr_isoforms[grepl(paste(toMatch,collapse="|"), rowData(sce_lr_isoforms)$value),]
+rownames(sce_lr_isoforms_select)
+
+sce_lr_isoforms_select_logcounts <- data.frame(logcounts(sce_lr_isoforms_select))
+sce_lr_isoforms_select_logcounts$names <- rownames(sce_lr_isoforms_select_logcounts)
+sce_lr_isoforms_select_logcounts$gene <- gsub("ENST\\d+\\.\\d+_E", "\\E", sce_lr_isoforms_select_logcounts$names)
+sce_lr_isoforms_select_logcounts$gene <- gsub("\\.\\d+", "", sce_lr_isoforms_select_logcounts$gene)
+
+biomartCacheClear()
+human_annotation = useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl")
+attributes = listAttributes(human_annotation)
+genes = getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position",  "strand", "percentage_gene_gc_content", 'transcript_biotype', "transcript_source", "transcript_length", "transcript_tsl", "transcript_count", "transcript_appris", "transcript_mane_select"), filters="ensembl_gene_id", values=sce_lr_isoforms_select_logcounts$gene, mart=human_annotation, useCache = FALSE)
+
+sce_lr_isoforms_select_logcounts_mart <- left_join(sce_lr_isoforms_select_logcounts, genes, by=c("gene"="ensembl_gene_id"))
+
+# select only principal isoform
+sce_lr_isoforms_select_logcounts_mart <- sce_lr_isoforms_select_logcounts_mart[grep("principal1", sce_lr_isoforms_select_logcounts_mart$transcript_appris),]
+
+sce_lr_isoforms_select_logcounts_mart <- sce_lr_isoforms_select_logcounts_mart[grep("tsl1", sce_lr_isoforms_select_logcounts_mart$transcript_tsl),]
+
+sce_lr_isoforms_select_logcounts_mart <- sce_lr_isoforms_select_logcounts_mart[grep("protein_coding", sce_lr_isoforms_select_logcounts_mart$transcript_biotype),]
+
+sce_lr_isoforms_select_logcounts_mart <- sce_lr_isoforms_select_logcounts_mart[grep("NM", sce_lr_isoforms_select_logcounts_mart$transcript_mane_select),]
+
+
+
+sce_lr_isoforms_select_logcounts_mart_uniqe <- sce_lr_isoforms_select_logcounts_mart[!duplicated(sce_lr_isoforms_select_logcounts_mart[c(91,92)]), ]
+
+sce_lr_isoforms_select_logcounts_mart_uniqe <- aggregate(sce_lr_isoforms_select_logcounts_mart_uniqe[,c(1:89, 101)], list(sce_lr_isoforms_select_logcounts_mart_uniqe$gene), mean)
+
+saveRDS(sce_lr_isoforms_select_logcounts_mart_uniqe, "~/sce_lr_isoforms_select_logcounts_mart_uniqe.rds")
+
+```
+

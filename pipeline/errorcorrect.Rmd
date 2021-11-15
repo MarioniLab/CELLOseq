@@ -81,7 +81,7 @@ We now output the errorcorrected reads to a FASTQ file.
 
 ```{r}
 outfile <- paste0(INDEX, "_", CHUNK, "_corrected_all.fastq")
-writeXStringSet(cons.out, outfile, format="fastq", qualities <- quality(cons.out))
+writeXStringSet(cons.out, outfile, format="fastq", qualities = quality(cons.out))
 ```
 
 # Session information

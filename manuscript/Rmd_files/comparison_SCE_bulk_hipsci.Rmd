@@ -1,0 +1,196 @@
+---
+title: "comparison_sce_bulk_hipsci"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/comparison_sce_bulk_hipsci.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r, include=FALSE}
+library(reshape2)
+library(Matrix)
+library(irlba)
+library("biomaRt")
+library("edgeR")
+library("tidyr")
+library("ggplot2")
+library(ComplexHeatmap)
+library(circlize)
+library(stringr)
+library(dplyr)
+library(ggbeeswarm)
+theme_set(theme_classic(base_size = 15))
+rm(list=ls())
+```
+
+
+# could define a set of high confidence MERVL and HERVH transcripts, respectively, and then report how many of these are detected per cell, and collectively. 
+
+
+## load data
+```{r}
+bulk_TElocal_hipsci <- readRDS("~/hipsci/hipsci_data_paired_gencode_full_intergenic_featureCount_output_matrix.rds")
+colnames(bulk_TElocal_hipsci) <- c("hipsci.GSE47626.SRR873618"  ,"hipsci.GSE47626.SRR873619" , "hipsci.GSE47626.SRR873620" , "hipsci.GSE47626.SRR873621" , "hipsci.GSE54726.SRR764958" , "hipsci.GSE56568.SRR1220694" ,"hipsci.GSE56568.SRR1220695", "hipsci.GSE56568.SRR1220696", "hipsci.GSE56568.SRR1220697", "RNAseq_NUFH3" )
+  
+counts_lr_hipsci_repeat_isoforms_merged_repeats <- readRDS( "~/counts_lr_hipsci_repeat_isoforms_merged_repeats.rds")
+```
+
+
+# Filter TEs by length, expression, name
+```{r}
+# in buld data
+bulk_TElocal_hipsci_HERVH <- bulk_TElocal_hipsci[grepl("HERVH-int", rownames(bulk_TElocal_hipsci)),]
+bulk_TElocal_hipsci_HERVH$unique_name <- rownames(bulk_TElocal_hipsci_HERVH)
+
+# add genomic location to bulk data
+bulk_TElocal_hipsci_HERVH$short_name <- sapply(strsplit(as.character(bulk_TElocal_hipsci_HERVH$unique_name), "-"),"[", 2)
+bulk_TElocal_hipsci_HERVH$chromosome <- sapply(strsplit(as.character(bulk_TElocal_hipsci_HERVH$short_name), "_"),"[", 2)
+bulk_TElocal_hipsci_HERVH$start_position <- sapply(strsplit(as.character(bulk_TElocal_hipsci_HERVH$short_name), "_"),"[", 3)
+bulk_TElocal_hipsci_HERVH$start_position <- as.integer(bulk_TElocal_hipsci_HERVH$start_position)
+bulk_TElocal_hipsci_HERVH$end_position <- sapply(strsplit(as.character(bulk_TElocal_hipsci_HERVH$unique_name), "-"),"[", 3)
+bulk_TElocal_hipsci_HERVH$end_position <- as.integer(bulk_TElocal_hipsci_HERVH$end_position)
+bulk_TElocal_hipsci_HERVH <- bulk_TElocal_hipsci_HERVH %>% na.omit()
+
+bulk_TElocal_hipsci_HERVH$length <- as.integer(bulk_TElocal_hipsci_HERVH$end_position)-as.integer(bulk_TElocal_hipsci_HERVH$start_position)
+bulk_TElocal_hipsci_HERVH_3000bp <- bulk_TElocal_hipsci_HERVH[bulk_TElocal_hipsci_HERVH$length>3000,]
+bulk_TElocal_hipsci_HERVH_nufh <- bulk_TElocal_hipsci_HERVH_3000bp[bulk_TElocal_hipsci_HERVH_3000bp$RNAseq_NUFH3>10,]
+
+# in Celloseq data
+counts_lr_hipsci_repeat_isoforms_merged_repeats <- counts_lr_hipsci_repeat_isoforms_merged_repeats[grepl("HERVH-int", counts_lr_hipsci_repeat_isoforms_merged_repeats$repeat_ids),]
+
+# merge datasets by genomic location
+bulk_cello_hipsci_hervh <- left_join(bulk_TElocal_hipsci_HERVH_nufh,counts_lr_hipsci_repeat_isoforms_merged_repeats, by=c("unique_name" = "repeat_ids"))
+bulk_cello_hipsci_hervh$expressed <- ifelse(is.na(bulk_cello_hipsci_hervh$rows)==TRUE,"not_expressed", "expressed")
+bulk_cello_hipsci_hervh_not_expressed <- bulk_cello_hipsci_hervh %>% filter(is.na(ids))
+write.table(bulk_cello_hipsci_hervh_not_expressed, "~/hipsci/bulk_cello_hipsci_hervh_not_expressed.txt", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+bulk_cello_hipsci_hervh_bed <- data.frame(paste(bulk_TElocal_hipsci_HERVH$chromosome), as.integer(bulk_TElocal_hipsci_HERVH$start_position), as.integer(bulk_TElocal_hipsci_HERVH$end_position))
+
+# write out coordinates as bed file
+write.table(bulk_cello_hipsci_hervh_bed, "~/hipsci/bulk_cello_hipsci_hervh.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+```
+
+
+# Epigenetic marks
+
+# load in all the datasets
+```{r}
+#load data
+mydir = "~/hipsci/GSE16256/"
+myfiles = list.files(path=mydir, pattern="*hervh.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE,col.names=c("chr", "start", "end", basename(x))))
+GSE16256_HERVH = Reduce(merge, counts_sr)
+colnames(GSE16256_HERVH) <- c("chr", "start", "end", "iPS_DF_19_11_wgbs",  "iPS_DF_6_9_wgbs", "iPS_DF_19.11.H3K27me3", "iPS_DF_6.9.H3K27me3", "iPS_DF_19.11.H3K4me3", "iPS_DF_6.9.H3K4me3", "iPS_DF_19.11.H3K9me3", "iPS_DF_6.9.H3K9me3")
+GSE16256_HERVH <- GSE16256_HERVH[,1:5]
+GSE16256_HERVH[,4:5] <- sapply(GSE16256_HERVH[,4:5],as.numeric)
+GSE16256_HERVH$methylation <-  rowMeans(GSE16256_HERVH[,c(4:5)], na.rm=TRUE)
+GSE16256_HERVH <- GSE16256_HERVH[, c(1, 2, 3, 6)]
+
+mydir = "~/hipsci/GSE85330/"
+myfiles = list.files(path=mydir, pattern="*hervh.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE85330_HERVH = Reduce(merge, counts_sr)
+colnames(GSE85330_HERVH) <- c("chr", "start", "end", "iPS_C15_0_1", "iPS_C15_0_2", "iPS_C20_0_1", "iPS_C20_0_2")
+GSE85330_HERVH[,4:7] <- sapply(GSE85330_HERVH[,4:7],as.numeric)
+GSE85330_HERVH$ATACseq <-  rowMeans(GSE85330_HERVH[,c(4:7)], na.rm=TRUE)
+GSE85330_HERVH <- GSE85330_HERVH[, c(1, 2, 3, 8)]
+
+mydir = "~/hipsci/GSE23455/"
+myfiles = list.files(path=mydir, pattern="*hervh.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE23455_HERVH = Reduce(merge, counts_sr)
+colnames(GSE23455_HERVH) <- c("chr", "start", "end", "H3K4me3_hiPS_1", "H3K4me3_hiPS_2", "H3K4me3_hiPS_3", "H3K4me3_hiPS_4",  "H3K27me3_hiPS_1", "H3K27me3_hiPS_2", "H3K27me3_hiPS_3", "H3K27me3_hiPS_4")
+GSE23455_HERVH[,4:11] <- sapply(GSE23455_HERVH[,4:11],as.numeric)
+GSE23455_HERVH$H3K4me3 <-  rowMeans(GSE23455_HERVH[,c(4:7)], na.rm=TRUE)
+GSE23455_HERVH$H3K27me3 <-  rowMeans(GSE23455_HERVH[,c(8:11)], na.rm=TRUE)
+GSE23455_HERVH <- GSE23455_HERVH[, c(1, 2, 3, 12,13)]
+```
+
+# merge RNAseq and epigenetic modifications
+```{r}
+colnames(bulk_cello_hipsci_hervh_bed) <- c("Chromosome", "Start", "End")
+bulk_cello_hipsci_hervh_bed <- bulk_cello_hipsci_hervh_bed %>%
+  tidyr::unite("chromosome.start", Chromosome:Start, sep=":") %>%
+  tidyr::unite("chromosome.start.stop", chromosome.start:End, sep="-") 
+
+
+bulk_cello_hipsci_hervh <- bulk_cello_hipsci_hervh %>%
+  tidyr::unite("chromosome.start", chromosome:start_position, sep=":") %>%
+  tidyr::unite("chromosome.start.stop", chromosome.start:end_position, sep="-") 
+
+bulk_cello_hipsci_hervh_merged <- bulk_cello_hipsci_hervh %>% 
+  left_join(bulk_cello_hipsci_hervh_bed, by = "chromosome.start.stop")
+
+
+bulk_cello_hipsci_hervh_ordered <- bulk_cello_hipsci_hervh[order(bulk_cello_hipsci_hervh[, "chromosome.start.stop"]), , drop = FALSE]
+
+
+GSE16256_HERVH_location <- GSE16256_HERVH %>%
+  tidyr::unite("chromosome.start", chr:start, sep=":") %>%
+  tidyr::unite("chromosome.start.stop", chromosome.start:end, sep="-")
+
+GSE85330_HERVH_location <- GSE85330_HERVH %>%
+  tidyr::unite("chromosome.start", chr:start, sep=":") %>%
+  tidyr::unite("chromosome.start.stop", chromosome.start:end, sep="-")
+GSE23455_HERVH_location <- GSE23455_HERVH %>%
+  tidyr::unite("chromosome.start", chr:start, sep=":") %>%
+  tidyr::unite("chromosome.start.stop", chromosome.start:end, sep="-")
+
+bulk_cello_hipsci_hervh_epi <- bulk_cello_hipsci_hervh_ordered %>% 
+  left_join(GSE16256_HERVH_location, by = "chromosome.start.stop") %>%
+  left_join(GSE85330_HERVH_location, by = "chromosome.start.stop") %>%
+  left_join(GSE23455_HERVH_location, by = "chromosome.start.stop")
+
+```
+
+# Normalisation of expression
+```{r}
+corr_matrix <- data.frame(bulk_cello_hipsci_hervh_epi[1:10],bulk_cello_hipsci_hervh_epi[16:111], bulk_cello_hipsci_hervh_epi[117:120])
+
+corr_matrix[is.na(corr_matrix)] <- 0
+
+corr_matrix_colsums<- colSums(corr_matrix[1:106])
+corr_matrix_per_million <- corr_matrix_colsums/1000000
+corr_matrix[1:106] <- mapply('/', corr_matrix[1:106], corr_matrix_per_million)
+corr_matrix[1:106] <- log2(corr_matrix[1:106]+1)
+corr_matrix[is.na(corr_matrix)] <- 0 
+```
+
+
+
+
+# transcripts per HERVH 
+```{r}
+
+counts_n_hervh <- sapply(corr_matrix[1:106], function(x) sum(x > 0))
+counts_n_hervh_melt_bulk <- reshape::melt(counts_n_hervh)
+counts_n_hervh_melt_bulk$variable <- ifelse(grepl("^barcode", rownames(counts_n_hervh_melt_bulk))==TRUE,"CELLO-seq", "published bulk data")
+saveRDS(cello_hipsci_hervh_epi_melt, "~/cello_hipsci_hervh_epi_melt.rds")
+
+# mean expression across cells
+exp_n_hervh <- sapply(corr_matrix[1:106], mean)
+exp_n_hervh_melt <- reshape::melt(exp_n_hervh)
+exp_n_hervh_melt$variable <- ifelse(grepl("^barcode", rownames(exp_n_hervh_melt))==TRUE,"CELLO-seq", "bulk")
+
+bulk_cello_hipsci_hervh_epi$RNAseq_Marchetto <- rowMeans(bulk_cello_hipsci_hervh_epi[,1:5])
+bulk_cello_hipsci_hervh_epi$RNAseq_Ohnuki <- rowMeans(bulk_cello_hipsci_hervh_epi[,6:9])
+exp_cello_hipsci_hervh_epi_melt <- reshape::melt(bulk_cello_hipsci_hervh_epi[,c(121,122,10, 116)], by="expressed")
+
+
+cello_hipsci_hervh_epi_melt$dataset <- ifelse(grepl("ATAC", cello_hipsci_hervh_epi_melt$variable)==TRUE, "ATAC-seq",ifelse(grepl("^iPS_DF", cello_hipsci_hervh_epi_melt$variable)==TRUE,"DNA_methylation",ifelse(grepl("^H3K4", cello_hipsci_hervh_epi_melt$variable)==TRUE,"H3K4me3", ifelse(grepl("^H3K27", rownames(cello_hipsci_hervh_epi_melt))==TRUE,"H3K27me3", "expression"))))
+
+# all epigenetic data 
+cello_hipsci_hervh_epi_melt <- reshape::melt(bulk_cello_hipsci_hervh_epi[, c(116:122, 10)], by="expressed")
+saveRDS(cello_hipsci_hervh_epi_melt, "~/cello_hipsci_hervh_epi_melt.rds")
+```
+

@@ -1,0 +1,348 @@
+---
+title: "Celloseq_QC"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/Celloseq_QC.html') })
+---
+
+```{r setup, include=FALSE}
+library(sarlacc)
+library(ggplot2)
+library(readr)
+```
+
+# coverage across reads
+```{r cars}
+# load in aligned and corrected or deduplicated sam file mapped to the transcriptome
+ref.aln <- sam2ranges("corrected.sam", minq = 0)
+all.transcripts <- seqlevels(ref.aln)[grepl("ENS", seqlevels(ref.aln))]
+ref.aln <- ref.aln[seqnames(ref.aln) %in% all.transcripts]
+
+# load in corrected or deduplicated fastq file
+fastq <- ("corrected.fastq")
+reads <- readQualityScaledDNAStringSet(fastq)
+names(reads) <- gsub(" .*","",names(reads))
+
+# read numbers
+total_read_number <- length(reads)
+
+# read length
+rel_lengths <- end(ref.aln)-start(ref.aln)
+
+# coverage over transcript
+aligned.width <- width(ref.aln)
+true.width <- seqlengths(ref.aln)[as.character(seqnames(ref.aln))]
+end.pos <- end(ref.aln)/true.width
+start.pos <- start(ref.aln)/true.width 
+rel_start_end <- cbind(end.pos, start.pos)%>% as.data.frame()
+colnames(rel_start_end) <- c("end", "start")
+rel_start_end_melt <- melt(rel_start_end)
+```
+
+#Isoform expression by read length
+```{r}
+aligned.width_mouse <- width(ref.aln_mouse)
+true.width_mouse <- seqlengths(ref.aln_mouse)[as.character(seqnames(ref.aln_mouse))]
+
+h_mouse = hist(start(ref.aln_mouse)/true.width_mouse,  breaks=20) # or hist(x,plot=FALSE) to avoid the plot of the histogram
+h_mouse$density = h_mouse$counts/sum(h_mouse$counts)*100
+
+saveRDS(ref.aln_mouse, "~/sam_align_mouse.rds")
+
+# get readnames by known-isoforms
+ref.aln_mouse_known_isoforms <- sam2ranges("~/2cell_all_corrected_fixed.fastq_transcript_flair.sam", minq = 0)
+
+ref.aln_mouse_known_isoforms_genes <- ref.aln_mouse_known_isoforms[grepl("^ENSMUST", seqnames(ref.aln_mouse_known_isoforms)),]
+
+true.width_known_iso_mouse <- seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]
+
+# filter aligned width > true.width! more than 10%
+ref.aln_mouse_known_isoforms_genes_filtered <- ref.aln_mouse_known_isoforms_genes[width(ref.aln_mouse_known_isoforms_genes)<true.width_known_iso_mouse,]
+
+saveRDS(ref.aln_mouse_known_isoforms_genes_filtered, "~/ref.aln_mouse_known_isoforms_genes_filtered.rds")
+
+
+ref.aln_mouse_known_isoforms_genes_0_1000 <- ref.aln_mouse_known_isoforms_genes[seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]<=1000,]
+ref.aln_mouse_known_isoforms_genes_1000_2000 <- ref.aln_mouse_known_isoforms_genes[seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]>1000 & seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]<=2000,]
+ref.aln_mouse_known_isoforms_genes_2000_3000 <- ref.aln_mouse_known_isoforms_genes[seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]>2000 & seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]<=3000,]
+ref.aln_mouse_known_isoforms_genes_3000_plus <- ref.aln_mouse_known_isoforms_genes[seqlengths(ref.aln_mouse_known_isoforms_genes)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes))]>3000,]
+
+ref.aln_mouse_known_isoforms_genes_0_1000_start <-  data.frame(unlist(start(ref.aln_mouse_known_isoforms_genes_0_1000)/seqlengths(ref.aln_mouse_known_isoforms_genes_0_1000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_0_1000))]))
+gene_length <- factor(rep(c("0-1000bp"), c(length(ref.aln_mouse_known_isoforms_genes_0_1000_start))))
+ref.aln_mouse_known_isoforms_genes_0_1000_start$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_0_1000_start) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_1000_2000_start <-  data.frame(unlist(start(ref.aln_mouse_known_isoforms_genes_1000_2000)/seqlengths(ref.aln_mouse_known_isoforms_genes_1000_2000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_1000_2000))]))
+gene_length <- factor(rep(c("1000-2000bp"), c(length(ref.aln_mouse_known_isoforms_genes_1000_2000_start))))
+ref.aln_mouse_known_isoforms_genes_1000_2000_start$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_1000_2000_start) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_2000_3000_start <-  data.frame(unlist(start(ref.aln_mouse_known_isoforms_genes_2000_3000)/seqlengths(ref.aln_mouse_known_isoforms_genes_2000_3000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_2000_3000))]))
+gene_length <- factor(rep(c("2000-3000bp"), c(length(ref.aln_mouse_known_isoforms_genes_2000_3000))))
+ref.aln_mouse_known_isoforms_genes_2000_3000_start$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_2000_3000_start) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_3000_plus_start <-  data.frame(unlist(start(ref.aln_mouse_known_isoforms_genes_3000_plus)/seqlengths(ref.aln_mouse_known_isoforms_genes_3000_plus)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_3000_plus))]))
+gene_length <- factor(rep(c(">3000bp"), c(length(ref.aln_mouse_known_isoforms_genes_3000_plus))))
+ref.aln_mouse_known_isoforms_genes_3000_plus_start$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_3000_plus_start) <- c("read_length", "gene_length")
+
+#end
+ref.aln_mouse_known_isoforms_genes_0_1000_end <-  data.frame(unlist(end(ref.aln_mouse_known_isoforms_genes_0_1000)/seqlengths(ref.aln_mouse_known_isoforms_genes_0_1000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_0_1000))]))
+gene_length <- factor(rep(c("0-1000bp"), c(length(ref.aln_mouse_known_isoforms_genes_0_1000_end))))
+ref.aln_mouse_known_isoforms_genes_0_1000_end$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_0_1000_end) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_1000_2000_end <-  data.frame(unlist(end(ref.aln_mouse_known_isoforms_genes_1000_2000)/seqlengths(ref.aln_mouse_known_isoforms_genes_1000_2000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_1000_2000))]))
+gene_length <- factor(rep(c("1000-2000bp"), c(length(ref.aln_mouse_known_isoforms_genes_1000_2000_end))))
+ref.aln_mouse_known_isoforms_genes_1000_2000_end$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_1000_2000_end) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_2000_3000_end <-  data.frame(unlist(end(ref.aln_mouse_known_isoforms_genes_2000_3000)/seqlengths(ref.aln_mouse_known_isoforms_genes_2000_3000)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_2000_3000))]))
+gene_length <- factor(rep(c("2000-3000bp"), c(length(ref.aln_mouse_known_isoforms_genes_2000_3000))))
+ref.aln_mouse_known_isoforms_genes_2000_3000_end$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_2000_3000_end) <- c("read_length", "gene_length")
+
+ref.aln_mouse_known_isoforms_genes_3000_plus_end <-  data.frame(unlist(end(ref.aln_mouse_known_isoforms_genes_3000_plus)/seqlengths(ref.aln_mouse_known_isoforms_genes_3000_plus)[as.character(seqnames(ref.aln_mouse_known_isoforms_genes_3000_plus))]))
+gene_length <- factor(rep(c(">3000bp"), c(length(ref.aln_mouse_known_isoforms_genes_3000_plus))))
+ref.aln_mouse_known_isoforms_genes_3000_plus_end$gene_length <- gene_length
+colnames(ref.aln_mouse_known_isoforms_genes_3000_plus_end) <- c("read_length", "gene_length")
+
+
+ref.aln_mouse_known_isoforms_genes_binned_start <- rbind(ref.aln_mouse_known_isoforms_genes_0_1000_start, ref.aln_mouse_known_isoforms_genes_1000_2000_start, ref.aln_mouse_known_isoforms_genes_2000_3000_start, ref.aln_mouse_known_isoforms_genes_3000_plus_start)
+position <- factor(rep(c("start"), c(nrow(ref.aln_mouse_known_isoforms_genes_binned_start))))
+ref.aln_mouse_known_isoforms_genes_binned_start$position <- position
+
+
+ref.aln_mouse_known_isoforms_genes_binned_end <- rbind(ref.aln_mouse_known_isoforms_genes_0_1000_end, ref.aln_mouse_known_isoforms_genes_1000_2000_end, ref.aln_mouse_known_isoforms_genes_2000_3000_end, ref.aln_mouse_known_isoforms_genes_3000_plus_end)
+position <- factor(rep(c("end"), c(nrow(ref.aln_mouse_known_isoforms_genes_binned_end))))
+ref.aln_mouse_known_isoforms_genes_binned_end$position <- position
+
+ref.aln_mouse_known_isoforms_genes_binned <- rbind(ref.aln_mouse_known_isoforms_genes_binned_start, ref.aln_mouse_known_isoforms_genes_binned_end)
+
+
+saveRDS(ref.aln_mouse_known_isoforms_genes_binned, "~/ref.aln_mouse_known_isoforms_genes_binned.rds")
+```
+
+# ERCC concentration to read number
+```{r}
+# load in ERCC concentration
+ERCC.conc <- read.delim("https://assets.thermofisher.com/TFS-Assets/LSG/manuals/cms_095046.txt",
+    stringsAsFactors = FALSE, check.names=FALSE)
+ids <- ERCC.conc[,"ERCC ID"] 
+conc <- log10(ERCC.conc[,"concentration in Mix 1 (attomoles/ul)"])
+
+#2cell long reads
+SCE_2cell_lr_all <- readRDS("~/SCE_2cell_lr_genes.rds")
+is.ercc <- rowData(SCE_2cell_lr_all)$value == "ERCC"
+SCE_2cell_lr_ercc <- splitAltExps(SCE_2cell_lr_all, ifelse(is.ercc, "repeats", "gene"))
+SCE_2cell_lr_ercc <- swapAltExp(SCE_2cell_lr_ercc, "ERCC", saved="genes")
+counts_2cell_lr_ercc <- data.frame(counts(SCE_2cell_lr_ercc))
+counts_2cell_lr_ercc <- rowMeans(counts_2cell_lr_ercc)
+
+observed_2cell_lr <- integer(length(conc))
+observed_2cell_lr[match(names(counts_2cell_lr_ercc), ids)] <- counts_2cell_lr_ercc
+
+ERCC_conc_2cell_lr <- data.frame(observed_2cell_lr, conc)
+saveRDS(ERCC_conc_2cell_lr, "~/ERCC_conc_2cell_lr.rds")
+
+
+# hipsci long reads ERCC
+SCE_hipsci_lr_all <- readRDS("~/SCE_hipsci_lr_all.rds")
+is.ercc <- rowData(SCE_hipsci_lr_all)$value == "ERCC"
+SCE_hipsci_lr_ercc <- splitAltExps(SCE_hipsci_lr_all, ifelse(is.ercc, "repeats", "gene"))
+SCE_hipsci_lr_ercc <- swapAltExp(SCE_hipsci_lr_ercc, "ERCC", saved="genes")
+counts_hipsci_lr_ercc <- data.frame(counts(SCE_hipsci_lr_ercc))
+counts_hipsci_lr_ercc <- rowMeans(counts_hipsci_lr_ercc)
+
+observed_hipsci_lr <- integer(length(conc))
+observed_hipsci_lr[match(names(counts_hipsci_lr_ercc), ids)] <- counts_hipsci_lr_ercc
+
+ERCC_conc_hipsci_lr <- data.frame(observed_hipsci_lr, conc)
+saveRDS(ERCC_conc_hipsci_lr, "~/ERCC_conc_hipsci_lr.rds")
+
+# short read data
+SCE_2cell_sr_all <- readRDS("~/SCE_2cell_sr.rds")
+is.ercc <- rowData(SCE_2cell_sr_all)$value == "ERCC"
+SCE_2cell_sr_all_ercc <- swapAltExp(SCE_2cell_sr_all, "ERCC", saved="genes")
+counts_2cell_sr_ercc <- data.frame(counts(SCE_2cell_sr_all_ercc))
+counts_2cell_sr_ercc <- rowMeans(counts_2cell_sr_ercc)
+
+observed_2cell_sr <- integer(length(conc))
+observed_2cell_sr[match(names(counts_2cell_sr_ercc), ids)] <- counts_2cell_sr_ercc
+
+ERCC_conc_2cell_sr <- data.frame(observed_2cell_sr, conc)
+saveRDS(ERCC_conc_2cell_sr, "~/ERCC_conc_2cell_sr.rds")
+
+# hipsci short read
+SCE_hipsci_sr_all <- readRDS("~/SCE_hipsci_sr.rds")
+is.ercc <- rowData(SCE_hipsci_sr_all)$value == "ERCC"
+SCE_hipsci_sr_ercc <- swapAltExp(SCE_hipsci_sr_all, "ERCC", saved="genes")
+counts_hipsci_sr_ercc <- data.frame(counts(SCE_hipsci_sr_ercc))
+counts_hipsci_sr_ercc <- rowMeans(counts_hipsci_sr_ercc)
+
+observed_hipsci_sr <- integer(length(conc))
+observed_hipsci_sr[match(names(counts_hipsci_sr_ercc), ids)] <- counts_hipsci_sr_ercc
+
+ERCC_conc_hipsci_sr <- data.frame(observed_hipsci_sr, conc)
+saveRDS(ERCC_conc_hipsci_sr, "~/ERCC_conc_hipsci_sr.rds")
+```
+
+# PCR jackpotting evaluation
+```{r}
+# load short read data
+UMIs_2cell <- read_tsv("~/2cell_groupings_min_unique.tsv")
+UMIs_2cell_umis <- UMIs_2cell %>% select(final_umi_count) %>% data.frame()
+colnames(UMIs_2cell_umis) <- c("short reads")
+UMIs_2cell_umis_melt <- melt(UMIs_2cell_umis)
+
+# load long read data
+bc19_umigroups <- readRDS("~/bc19_umigroups.rds")
+bc7_umigroups <- readRDS("~/bc7_umigroups.rds")
+bc31_umigroups <- readRDS("~/bc31_umigroups.rds")
+bc43_umigroups <- readRDS("~/bc43_umigroups.rds")
+bc79_umigroups <- readRDS("~/bc79_umigroups.rds")
+bc91_umigroups <- readRDS("~/bc91_umigroups.rds")
+
+#combine UMI length vectors
+umi_length_append <- c(lengths(bc19_umigroups), lengths(bc7_umigroups),lengths(bc31_umigroups),lengths(bc43_umigroups),lengths(bc79_umigroups),lengths(bc91_umigroups))
+
+# make dataframe
+umi_length_append_df <- umi_length_append %>% data.frame()
+colnames(umi_length_append_df) <- c("long reads")
+umi_length_append_df_melt <- melt(umi_length_append_df)
+
+#combine
+PCR_jackpotting <- rbind(UMIs_2cell_umis_melt,umi_length_append_df_melt)
+
+# save 
+saveRDS(PCR_jackpotting, "~/PCR_jackpotting.rds")
+
+```
+
+# Molecules per gene
+```{r}
+sce_lr_hipsci <- readRDS("~/SCE_hipsci_lr_genes.rds")
+sce_lr_two_cell <- readRDS("~/SCE_2cell_lr_genes.rds")
+
+hipsci_libsize <- colData(sce_lr_hipsci)$libsize
+mean(hipsci_libsize)
+hipsci_genes <- colData(sce_lr_hipsci)$genes
+hipsci_gene_mol <- cbind(hipsci_libsize, hipsci_genes) %>% data.frame()
+colnames(hipsci_gene_mol)<- c("libsize", "genes")
+hipsci <- factor(rep(c("human iPS"), c(nrow(hipsci_gene_mol))))
+hipsci_gene_mol$dataset=hipsci
+
+two_cell_libsize <- colData(sce_lr_two_cell)$libsize
+two_cell_genes <- colData(sce_lr_two_cell)$genes
+two_cell_gene_mol <- cbind(two_cell_libsize, two_cell_genes) %>% data.frame()
+colnames(two_cell_gene_mol)<- c("libsize", "genes")
+two_cell <- factor(rep(c("mouse 2cell"), c(nrow(two_cell_gene_mol))))
+two_cell_gene_mol$dataset=two_cell
+
+mol_gene_all <- rbind(two_cell_gene_mol, hipsci_gene_mol)
+
+mol_gene_all$dataset <- factor(mol_gene_all$dataset, levels = c("mouse 2cell", "human iPS"), labels  = c("mouse 2-cell", "human iPSCs"))
+```
+
+# read identity
+```{r}
+
+mouse_2cell_corrected_identity_info <- readRDS( "~/mouse_2cell_corrected_identity_info.rds")
+
+mouse_2cell_corrected_identity_info_10 <- mouse_2cell_corrected_identity_info[as.integer(mouse_2cell_corrected_identity_info$group_size)<=10,]
+mouse_2cell_corrected_identity_info_plot <- ggplot(mouse_2cell_corrected_identity_info_10[mouse_2cell_corrected_identity_info_10$alignment_type == "mapped" & mouse_2cell_corrected_identity_info_10$mapping_quality == 60, ], aes(x=group_size, y=read_identity_match_mismatch_gap)) + 
+  geom_boxplot(outlier.shape = NULL) +
+  theme(axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12), legend.position = "bottom", legend.key.size = unit(0.5,"cm"), legend.text = element_text(size=12),plot.margin = unit(c(1,1,1, 1), "cm")) + 
+  labs(x="Read coverage", y="Read identity (%)") 
+#+  scale_y_continuous(n.breaks=6)
+
+mouse_2cell_deduplicated_identity_info <- readRDS( "~/mouse_2cell_deduplicated_identity_info.rds")
+
+mouse_2cell_deduplicated_identity_info$group_size = factor(mouse_2cell_deduplicated_identity_info$group_size, levels=names(table(mouse_2cell_deduplicated_identity_info$group_size)))
+
+mouse_2cell_deduplicated_identity_info_10 <- mouse_2cell_deduplicated_identity_info[as.integer(mouse_2cell_deduplicated_identity_info$group_size)<=10,]
+
+mouse_2cell_deduplicated_identity_info_10_grouped <-aggregate(mouse_2cell_deduplicated_identity_info_10[, 7], list(mouse_2cell_deduplicated_identity_info_10$group_size), mean)
+```
+
+# read numbers w/o adapters, demultiplexed, corrected
+```{r}
+# cell data
+n_reads_fastq_2cell <- 10148191
+n_reads_both_adap_2cell <- 8041990
+n_reads_demulti_2cell <- 7661130
+n_errorcorrected_2cell <- 2861445
+read_numbers_2cell <- rbind(n_reads_fastq_2cell, n_reads_both_adap_2cell, n_reads_demulti_2cell, n_errorcorrected_2cell) %>% data.frame()
+read_numbers_2cell$percentage <- read_numbers_2cell$./n_reads_fastq_2cell
+rownames(read_numbers_2cell) <- c("all reads", "adapter trimmed", "demultiplexed", "error corrected/ \n deduplicated")
+read_numbers_2cell$samples <- rownames(read_numbers_2cell)
+read_numbers_2cell$samples <- factor(read_numbers_2cell$samples, levels = c("all reads", "adapter trimmed", "demultiplexed", "error corrected/ \n deduplicated"))
+data <- factor(rep(c("2cell"), c(nrow(read_numbers_2cell))))
+read_numbers_2cell$dataset <- data
+
+n_reads_fastq_hipsci <- 6477225
+n_reads_both_adap_hipsci  <- 5052235
+n_reads_demulti_hipsci  <- 4261384
+n_errorcorrected_hipsci  <- 1218384
+read_numbers_hipsci <- rbind(n_reads_fastq_hipsci, n_reads_both_adap_hipsci, n_reads_demulti_hipsci, n_errorcorrected_hipsci) %>% data.frame()
+read_numbers_hipsci$percentage <- read_numbers_hipsci$./n_reads_fastq_hipsci
+rownames(read_numbers_hipsci) <- c("all reads", "adapter trimmed", "demultiplexed", "error corrected/ \n deduplicated")
+read_numbers_hipsci$samples <- rownames(read_numbers_hipsci)
+read_numbers_hipsci$samples <- factor(read_numbers_hipsci$samples, levels = c("all reads", "adapter trimmed", "demultiplexed", "error corrected/ \n deduplicated"))
+data <- factor(rep(c("human iPSC"), c(nrow(read_numbers_hipsci))))
+read_numbers_hipsci$dataset <- data
+
+read_numbers <- rbind(read_numbers_hipsci,read_numbers_2cell)
+```
+
+# gene length expression short read long read
+```{r}
+#mouse
+sce_lr_2cell_isoforms_known_logcounts_mart_unique <- readRDS( "~/sce_lr_2cell_isoforms_known_logcounts_mart_unique.rds")
+
+sce_lr_2cell_isoforms_known_logcounts_mart_unique$mean_exp <- rowMeans(sce_lr_2cell_isoforms_known_logcounts_mart_unique[1:6])
+sce_lr_2cell_isoforms_known_logcounts_mart_unique_mean <- sce_lr_2cell_isoforms_known_logcounts_mart_unique[,(c(9, 19, 22))]
+
+sce_lr_2cell_isoforms_select_logcounts_mart_uniqe <- readRDS( "~/sce_lr_2cell_isoforms_select_logcounts_mart_uniqe.rds")
+
+sce_lr_2cell_isoforms_select_logcounts_mart_uniqe$mean_exp <- rowMeans(sce_lr_2cell_isoforms_select_logcounts_mart_uniqe[2:7])
+sce_lr_2cell_isoforms_select_logcounts_mart_uniqe_mean <- sce_lr_2cell_isoforms_select_logcounts_mart_uniqe[,(c(1, 8, 9))]
+
+sce_sr_2cell_gene <- readRDS("~/sce_sr_2cell_gene.rds")
+
+sce_sr_2cell_gene_logcounts <- data.frame(logcounts(sce_sr_2cell_gene))
+sce_sr_2cell_gene_logcounts$gene <- rownames(sce_sr_2cell_gene_logcounts)
+sce_sr_2cell_gene_logcounts$mean_exp <- rowMeans(sce_sr_2cell_gene_logcounts[1:6])
+sce_sr_2cell_gene_logcounts_select <- sce_sr_2cell_gene_logcounts[,(c(7,8))]
+sce_sr_2cell_gene_logcounts_select$gene <- gsub("\\.\\d+", "", sce_sr_2cell_gene_logcounts_select$gene)
+
+
+gene_length_binned <- left_join(sce_sr_2cell_gene_logcounts_select, sce_lr_2cell_isoforms_select_logcounts_mart_uniqe_mean, by=c("gene"="Group.1")) 
+gene_length_binned <- na.omit(gene_length_binned)
+colnames(gene_length_binned) <- c("gene", "short_read_exp",  "tx_length", "long_read_exp")
+gene_length_binned_0_1000 <- gene_length_binned[gene_length_binned$tx_len<=1000,]
+transcript_length <- factor(rep(c("<1000bp"), c(nrow(gene_length_binned_0_1000))))
+gene_length_binned_0_1000$transcript_length <- transcript_length
+
+gene_length_binned_1000_2000 <- gene_length_binned[gene_length_binned$tx_len>1000 & gene_length_binned$tx_len<=2000,]
+transcript_length <- factor(rep(c("1000-2000bp"), c(nrow(gene_length_binned_1000_2000))))
+gene_length_binned_1000_2000$transcript_length <- transcript_length
+
+gene_length_binned_2000_3000 <- gene_length_binned[gene_length_binned$tx_len>2000 & gene_length_binned$tx_len<=3000,]
+transcript_length <- factor(rep(c("2000-3000bp"), c(nrow(gene_length_binned_2000_3000))))
+gene_length_binned_2000_3000$transcript_length <- transcript_length
+
+gene_length_binned_3000_plus<- gene_length_binned[gene_length_binned$tx_len>3000,]
+transcript_length <- factor(rep(c(">3000bp"), c(nrow(gene_length_binned_3000_plus))))
+gene_length_binned_3000_plus$transcript_length <- transcript_length
+
+gene_length_binned_sr_lr <- rbind(gene_length_binned_0_1000, gene_length_binned_1000_2000, gene_length_binned_2000_3000, gene_length_binned_3000_plus)
+
+```
+

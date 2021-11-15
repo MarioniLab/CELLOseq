@@ -1,0 +1,279 @@
+---
+title: "SCE_isoform_long_reads"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/SCE_isoform_long_reads.html') })
+        ---
+
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+require(knitr)
+require(BiocStyle)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r setup, echo=FALSE, message=FALSE}
+library(reshape2)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+library(stringr)
+library(biomaRt)
+library(SingleCellExperiment)
+library(scRNAseq)
+library(tidyverse)
+library(AnnotationDbi)
+library(GenomicFeatures)
+library(circlize)
+library(ComplexHeatmap)
+library(limma)
+library(GO.db)
+library(rtracklayer)
+rm(list=ls())
+```
+
+# Introduction
+
+We are using the flair package to perform our isoform analysis of the scLONGseq dataset.
+This allows us to understand the ability to perform isoform mapping of our long read data.
+We will compare different datasets : 2cell mouse blastomeres and human iPS cells.
+
+# Loading data
+```{r loading_data}
+SCE_2cell_lr_isoforms <- readRDS("/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/SCE_2cell_lr_isoforms.rds")
+mouse_TE_age_filtered <-readRDS("/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/mouse_TE_age_filtered.rds")
+```
+
+# Filter data
+```{r}
+SCE_2cell_lr_isoforms <- SCE_2cell_lr_isoforms[rowSums(counts(SCE_2cell_lr_isoforms)) >= 5,]
+SCE_2cell_lr_isoforms_all_mean_mol_feat_cell <- colSums(counts(SCE_2cell_lr_isoforms))
+
+# filter for isoform classes
+SCE_2cell_lr_known_isoforms <- SCE_2cell_lr_isoforms[rowData(SCE_2cell_lr_isoforms)$value == "known_isoform", ]
+SCE_2cell_lr_known_isoforms <- SCE_2cell_lr_known_isoforms[rowSums(counts(SCE_2cell_lr_known_isoforms)) >= 5,]
+SCE_2cell_lr_known_isoforms_mean_mol_feat_cell <- colSums(logcounts(SCE_2cell_lr_known_isoforms))
+
+SCE_2cell_lr_novel_isoforms <- SCE_2cell_lr_isoforms[rowData(SCE_2cell_lr_isoforms)$value == "novel_isoform", ]
+SCE_2cell_lr_novel_isoforms <- SCE_2cell_lr_novel_isoforms[rowSums(counts(SCE_2cell_lr_novel_isoforms)) >= 5,]
+SCE_2cell_lr_novel_isoforms_mean_mol_feat_cell <- colSums(logcounts(SCE_2cell_lr_novel_isoforms))
+
+SCE_2cell_lr_repeat_isoforms <- SCE_2cell_lr_isoforms[rowData(SCE_2cell_lr_isoforms)$value == "repeat_isoforms", ]
+rownames(SCE_2cell_lr_repeat_isoforms) <- gsub(" ", "", rownames(SCE_2cell_lr_repeat_isoforms))
+SCE_2cell_lr_repeat_isoforms_mean_mol_feat_cell <- colSums(counts(SCE_2cell_lr_repeat_isoforms))
+```
+
+# mean expression of isoform class per cell
+```{r}
+# collate all data
+hipsci_isoforms_mean_mol_feat_cell <- qpcR:::cbind.na(SCE_hipsci_lr_isoforms_all_mean_mol_feat_cell, SCE_hipsci_lr_known_isoforms_mean_mol_feat_cell, SCE_hipsci_lr_novel_isoforms_mean_mol_feat_cell, SCE_hipsci_lr_repeat_isoforms_mean_mol_feat_cell) %>% data.frame()
+colnames(hipsci_isoforms_mean_mol_feat_cell) <- c("all", "known", "novel", "repeat-derived")
+
+hipsci <- factor(rep(c("human IPs"), c(nrow(hipsci_isoforms_mean_mol_feat_cell))))
+hipsci_isoforms_mean_mol_feat_cell$dataset <- hipsci
+hipsci_isoforms_mean_mol_feat_cell_melt <- melt(hipsci_isoforms_mean_mol_feat_cell)
+
+# collate all data
+twocell_isoforms_mean_mol_feat_cell <- qpcR:::cbind.na(SCE_2cell_lr_isoforms_all_mean_mol_feat_cell, SCE_2cell_lr_known_isoforms_mean_mol_feat_cell, SCE_2cell_lr_novel_isoforms_mean_mol_feat_cell, SCE_2cell_lr_repeat_isoforms_mean_mol_feat_cell) %>% data.frame()
+colnames(twocell_isoforms_mean_mol_feat_cell) <- c("all", "known", "novel", "repeat-derived")
+
+twocell <- factor(rep(c("mouse 2cell blastomeres"), c(nrow(twocell_isoforms_mean_mol_feat_cell))))
+twocell_isoforms_mean_mol_feat_cell$dataset <- twocell
+twocell_isoforms_mean_mol_feat_cell_melt <- melt(twocell_isoforms_mean_mol_feat_cell)
+
+combined_isoforms_mean_mol_feat_cell_melt <- rbind(twocell_isoforms_mean_mol_feat_cell_melt, hipsci_isoforms_mean_mol_feat_cell_melt)
+saveRDS(combined_isoforms_mean_mol_feat_cell_melt, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/combined_isoforms_mean_mol_feat_cell_melt.rds")
+
+# plot data
+combined_isoforms_mean_mol_feat_cell_melt_plot <- ggplot(combined_isoforms_mean_mol_feat_cell_melt, aes(x=variable, y = value+1, fill = variable)) +
+  geom_boxplot() + 
+  facet_wrap(~dataset) +
+  theme_light(base_size = 15) +
+  labs(y="number of molecules per isoforms per cell", x="isoforms") + 
+  scale_y_continuous(trans = 'log10')
+```
+
+# n isoforms expressed per class per cell
+```{r}
+stats_SCE_2cell_lr_known_isoforms <- perCellQCMetrics(SCE_2cell_lr_known_isoforms)
+colData(SCE_2cell_lr_known_isoforms)$libsize <- stats_SCE_2cell_lr_known_isoforms$sum
+colData(SCE_2cell_lr_known_isoforms)$genes <- stats_SCE_2cell_lr_known_isoforms$detected
+
+stats_SCE_2cell_lr_novel_isoforms <- perCellQCMetrics(SCE_2cell_lr_novel_isoforms)
+colData(SCE_2cell_lr_novel_isoforms)$libsize <- stats_SCE_2cell_lr_novel_isoforms$sum
+colData(SCE_2cell_lr_novel_isoforms)$genes <- stats_SCE_2cell_lr_novel_isoforms$detected
+
+stats_SCE_2cell_lr_repeat_isoforms <- perCellQCMetrics(SCE_2cell_lr_repeat_isoforms)
+colData(SCE_2cell_lr_repeat_isoforms)$libsize <- stats_SCE_2cell_lr_repeat_isoforms$sum
+colData(SCE_2cell_lr_repeat_isoforms)$genes <- stats_SCE_2cell_lr_repeat_isoforms$detected
+
+n_isoforms_2cell <- data.frame(colData(SCE_2cell_lr_isoforms)$genes, colData(SCE_2cell_lr_known_isoforms)$genes, colData(SCE_2cell_lr_novel_isoforms)$genes, colData(SCE_2cell_lr_repeat_isoforms)$genes)
+colnames(n_isoforms_2cell) <- c("all", "known", "novel", "repeat-derived")
+twocell <- factor(rep(c("mouse 2cell blastomeres"), c(nrow(n_isoforms_2cell))))
+n_isoforms_2cell$dataset <- twocell
+n_isoforms_2cell_melt <- melt(n_isoforms_2cell)
+
+stats_SCE_hipsci_lr_known_isoforms <- perCellQCMetrics(SCE_hipsci_lr_known_isoforms)
+colData(SCE_hipsci_lr_known_isoforms)$libsize <- stats_SCE_hipsci_lr_known_isoforms$sum
+colData(SCE_hipsci_lr_known_isoforms)$genes <- stats_SCE_hipsci_lr_known_isoforms$detected
+
+stats_SCE_hipsci_lr_novel_isoforms <- perCellQCMetrics(SCE_hipsci_lr_novel_isoforms)
+colData(SCE_hipsci_lr_novel_isoforms)$libsize <- stats_SCE_hipsci_lr_novel_isoforms$sum
+colData(SCE_hipsci_lr_novel_isoforms)$genes <- stats_SCE_hipsci_lr_novel_isoforms$detected
+
+stats_SCE_hipsci_lr_repeat_isoforms <- perCellQCMetrics(SCE_hipsci_lr_repeat_isoforms)
+colData(SCE_hipsci_lr_repeat_isoforms)$libsize <- stats_SCE_hipsci_lr_repeat_isoforms$sum
+colData(SCE_hipsci_lr_repeat_isoforms)$genes <- stats_SCE_hipsci_lr_repeat_isoforms$detected
+
+n_isoforms_hipsci <- data.frame(colData(SCE_hipsci_lr_isoforms)$genes, colData(SCE_hipsci_lr_known_isoforms)$genes, colData(SCE_hipsci_lr_novel_isoforms)$genes, colData(SCE_hipsci_lr_repeat_isoforms)$genes)
+colnames(n_isoforms_hipsci) <- c("all", "known", "novel", "repeat-derived")
+hipsci <- factor(rep(c("human IPs"), c(nrow(n_isoforms_hipsci))))
+n_isoforms_hipsci$dataset <- hipsci
+n_isoforms_hipsci_melt <- melt(n_isoforms_hipsci)
+
+n_isoforms_all_melt <- rbind(n_isoforms_2cell_melt, n_isoforms_hipsci_melt)
+
+saveRDS(n_isoforms_all_melt, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/n_isoforms_hipsci_melt.rds")
+```
+
+# Repeat isoforms
+```{r}
+#assign location to repeat isoforms
+logcounts_2cell_lr_repeat_isoforms <- data.frame(logcounts(SCE_2cell_lr_repeat_isoforms))
+
+logcounts_2cell_lr_repeat_isoforms$chromosome_name = str_extract(string = rownames(logcounts_2cell_lr_repeat_isoforms), pattern = "chr[0-9]+|chrX|chrY")
+location <- sapply(strsplit(rownames(logcounts_2cell_lr_repeat_isoforms), "_chr[0-9]+_|_chrX_|_chrY_"), "[", 2)
+logcounts_2cell_lr_repeat_isoforms$start_position <- sapply(strsplit(location, "-"),"[", 1)
+logcounts_2cell_lr_repeat_isoforms$end_position <- sapply(strsplit(location, "-"),"[", 2)
+logcounts_2cell_lr_repeat_isoforms$end_position <- as.numeric(logcounts_2cell_lr_repeat_isoforms$end_position)
+logcounts_2cell_lr_repeat_isoforms$start_position <- as.numeric(logcounts_2cell_lr_repeat_isoforms$start_position)
+logcounts_2cell_lr_repeat_isoforms$name <- sapply(strsplit(rownames(logcounts_2cell_lr_repeat_isoforms), "_chr"), "[", 1)
+logcounts_2cell_lr_repeat_isoforms$unique_name <- rownames(logcounts_2cell_lr_repeat_isoforms)
+table(duplicated(logcounts_2cell_lr_repeat_isoforms$unique_name))
+
+saveRDS(logcounts_2cell_lr_repeat_isoforms, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/logcounts_2cell_lr_repeat_isoforms.rds")
+
+# join repeat isoforms data with transposon repeatfamily information
+mouse_TE_age_filtered_selected <- mouse_TE_age_filtered[,c(1:7, 9)]
+colnames(mouse_TE_age_filtered_selected) <- c("chromosome_name", "start_position", "end_position",  "name", "repFamily", "repClass", "strand", "mya")
+mouse_TE_age_filtered_selected$start_position <- as.numeric(mouse_TE_age_filtered_selected$start_position)
+mouse_TE_age_filtered_selected$start_position <- mouse_TE_age_filtered_selected$start_position +1
+mouse_TE_age_filtered_selected$end_position <- as.numeric(mouse_TE_age_filtered_selected$end_position)
+
+logcounts_2cell_lr_repeat_isoforms_TEinfo <- left_join(logcounts_2cell_lr_repeat_isoforms, mouse_TE_age_filtered_selected)
+logcounts_2cell_lr_repeat_isoforms_TEinfo <- logcounts_2cell_lr_repeat_isoforms_TEinfo %>% na.omit()
+logcounts_2cell_lr_repeat_isoforms_TEinfo <- logcounts_2cell_lr_repeat_isoforms_TEinfo[!grepl("CR1", logcounts_2cell_lr_repeat_isoforms_TEinfo$repFamily),]
+logcounts_2cell_lr_repeat_isoforms_TEinfo <- logcounts_2cell_lr_repeat_isoforms_TEinfo[!grepl("^RTE", logcounts_2cell_lr_repeat_isoforms_TEinfo$repFamily),]
+logcounts_2cell_lr_repeat_isoforms_TEinfo$repFamily <- gsub("Alu","B1", logcounts_2cell_lr_repeat_isoforms_TEinfo$repFamily)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_melt <- melt(logcounts_2cell_lr_repeat_isoforms_TEinfo)
+saveRDS(logcounts_2cell_lr_repeat_isoforms_TEinfo_melt, "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/logcounts_2cell_lr_repeat_isoforms_TEinfo_melt.rds")
+
+# overlap TE isoforms with genes
+# repeat isoform granges
+gr_repeat_isoforms <- GRanges(
+  seqnames = logcounts_2cell_lr_repeat_isoforms_TEinfo$chromosome_name,
+  ranges = paste0(logcounts_2cell_lr_repeat_isoforms_TEinfo$start_position, "-",logcounts_2cell_lr_repeat_isoforms_TEinfo$end_position),
+  strand = logcounts_2cell_lr_repeat_isoforms_TEinfo$strand)
+
+gffRangedData<-import.gff("//Users/berren01/Dropbox/Projects/Nanopore/Analysis/20190717_2_cell/isoforms/gencode.vM23.annotation.gtf")
+myGranges<-as(gffRangedData, "GRanges")
+
+# find overlaps
+dist_repeatiso_gene <- distanceToNearest(gr_repeat_isoforms, myGranges)
+dist_repeatiso_gene_overlap <- dist_repeatiso_gene[mcols(dist_repeatiso_gene)$distance == 0,]
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- logcounts_2cell_lr_repeat_isoforms_TEinfo[queryHits(dist_repeatiso_gene_overlap),]
+
+genes_overlapping_repeat_isoforms <- myGranges[subjectHits(dist_repeatiso_gene_overlap)]
+
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- cbind(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, ensembl_gene_id= genes_overlapping_repeat_isoforms$gene_id)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- cbind(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, gene_id= genes_overlapping_repeat_isoforms$gene_name)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- cbind(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, gene_type= genes_overlapping_repeat_isoforms$gene_type)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- cbind(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, transcript_name= genes_overlapping_repeat_isoforms$transcript_name)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- cbind(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, transcript_type= genes_overlapping_repeat_isoforms$transcript_type)
+
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap$ensembl_gene_id <- gsub("\\.\\d+", "", logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap$ensembl_gene_id)
+
+biomartCacheClear()
+mouse_annotation = useEnsembl("ensembl", dataset = "mmusculus_gene_ensembl", mirror = "www")
+ids = getBM(attributes = c('entrezgene_id', 'ensembl_gene_id'), filters="ensembl_gene_id", values=logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap$ensembl_gene_id, mart=mouse_annotation, useCache = FALSE)
+
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- left_join(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap, ids)
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap <- logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap %>% na.omit()
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high<- logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap[rowMeans(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap[1:6]) >= 2,]
+logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high <- logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high[!duplicated(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high$gene_id),]
+rownames(logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high) <- logcounts_2cell_lr_repeat_isoforms_TEinfo_overlap_high$gene_id
+```
+
+# repeat isoform TES/TSS
+```{r}
+# expression
+sce_lr_hipsci_isoforms_repeat_logcounts_classification <- readRDS( "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/sce_lr_hipsci_isoforms_repeat_logcounts_classification.rds")
+
+sce_lr_hipsci_isoforms_repeat_logcounts_classification$mean_exp <- rowMeans(sce_lr_hipsci_isoforms_repeat_logcounts_classification[1:89])
+dataset <- factor(rep(c("human iPSC"), c(nrow(sce_lr_hipsci_isoforms_repeat_logcounts_classification))))
+sce_lr_hipsci_isoforms_repeat_logcounts_classification$dataset <- dataset
+sce_lr_hipsci_isoforms_repeat_logcounts_classification_select <- sce_lr_hipsci_isoforms_repeat_logcounts_classification[,c(92, 93,94)]
+
+sce_lr_2cell_isoforms_repeat_logcounts_classification <- readRDS( "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/sce_lr_2cell_isoforms_repeat_logcounts_classification.rds")
+
+sce_lr_2cell_isoforms_repeat_logcounts_classification$mean_exp <- rowMeans(sce_lr_2cell_isoforms_repeat_logcounts_classification[1:6])
+dataset <- factor(rep(c("2cell"), c(nrow(sce_lr_2cell_isoforms_repeat_logcounts_classification))))
+sce_lr_2cell_isoforms_repeat_logcounts_classification$dataset <- dataset
+sce_lr_2cell_isoforms_repeat_logcounts_classification_select <- sce_lr_2cell_isoforms_repeat_logcounts_classification[,c(9:11)]
+
+lr_repeat_isoform_classification_exp <- rbind(sce_lr_hipsci_isoforms_repeat_logcounts_classification_select, sce_lr_2cell_isoforms_repeat_logcounts_classification_select)
+
+# numbers
+numbers_hipsci <- table(sce_lr_hipsci_isoforms_repeat_logcounts_classification_select$classification)
+numbers_2cell <- table(sce_lr_2cell_isoforms_repeat_logcounts_classification_select$classification)
+numbers <- rbind(numbers_hipsci, numbers_2cell)
+rownames(numbers) <- c("hipsci", "2cell")
+numbers_melt <- reshape2::melt(numbers)
+
+numbers_melt <- numbers_melt[5:8,]
+
+# TE family
+# hipsci data
+logcounts_hipsci_lr_repeat_isoforms_TEinfo_melt <- readRDS( "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/logcounts_hipsci_lr_repeat_isoforms_TEinfo_melt.rds")
+
+sce_lr_hipsci_isoforms_repeat_logcounts_classification$names <- gsub(" ", "", sce_lr_hipsci_isoforms_repeat_logcounts_classification$names)
+sce_lr_hipsci_isoforms_repeat_logcounts_classification_family <- left_join(sce_lr_hipsci_isoforms_repeat_logcounts_classification, logcounts_hipsci_lr_repeat_isoforms_TEinfo_melt, by = c("names"="unique_name"))
+
+sce_lr_hipsci_isoforms_repeat_logcounts_classification_family <- na.omit(sce_lr_hipsci_isoforms_repeat_logcounts_classification_family)
+
+sce_lr_hipsci_isoforms_repeat_logcounts_classification_family_unique <- sce_lr_hipsci_isoforms_repeat_logcounts_classification_family[!duplicated(sce_lr_hipsci_isoforms_repeat_logcounts_classification_family$names, sce_lr_hipsci_isoforms_repeat_logcounts_classification_family$ids),]
+
+numbers_hipsci_family <- table(sce_lr_hipsci_isoforms_repeat_logcounts_classification_family_unique$classification, sce_lr_hipsci_isoforms_repeat_logcounts_classification_family_unique$repFamily)
+numbers_hipsci_family <- numbers_hipsci_family[3:4,]
+numbers_hipsci_family_melt <- reshape2::melt(numbers_hipsci_family)
+
+#2cell data
+logcounts_2cell_lr_repeat_isoforms_TEinfo_melt <- readRDS( "/Users/berren01/Dropbox/Projects/Nanopore/Paper/preprocessing/logcounts_2cell_lr_repeat_isoforms_TEinfo_melt.rds")
+
+sce_lr_2cell_isoforms_repeat_logcounts_classification$names <- gsub(" ", "", sce_lr_2cell_isoforms_repeat_logcounts_classification$names)
+sce_lr_2cell_isoforms_repeat_logcounts_classification_family <- left_join(sce_lr_2cell_isoforms_repeat_logcounts_classification, logcounts_2cell_lr_repeat_isoforms_TEinfo_melt, by = c("names"="unique_name"))
+
+sce_lr_2cell_isoforms_repeat_logcounts_classification_family <- na.omit(sce_lr_2cell_isoforms_repeat_logcounts_classification_family)
+
+sce_lr_2cell_isoforms_repeat_logcounts_classification_family_unique <- sce_lr_2cell_isoforms_repeat_logcounts_classification_family[!duplicated(sce_lr_2cell_isoforms_repeat_logcounts_classification_family$names, sce_lr_2cell_isoforms_repeat_logcounts_classification_family$ids),]
+
+numbers_2cell_family <- table(sce_lr_2cell_isoforms_repeat_logcounts_classification_family_unique$classification, sce_lr_2cell_isoforms_repeat_logcounts_classification_family_unique$repFamily)
+numbers_2cell_family <- numbers_2cell_family[3:4,]
+numbers_2cell_family_melt <- reshape2::melt(numbers_2cell_family)
+
+```
+

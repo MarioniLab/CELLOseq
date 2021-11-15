@@ -1,0 +1,103 @@
+---
+title: "SCE_short_reads"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/SCE_short_reads.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r cars}
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+rm(list=ls())
+```
+
+## Introduction
+Read in the short read 6 data of 2cell dataset
+```{r}
+illumina_counts <- readRDS("~/genic_gencode_full_intergenic_repeats_ercc_count_matrix.rds")
+```
+
+
+```{r, include=FALSE}
+# Form a sce 
+sce_sr <- SingleCellExperiment(assays=list(counts=as.matrix(illumina_counts)))
+
+# define spike in data
+is.spike <- grepl("^ERCC", rownames(sce_sr))
+sce_sr <- splitAltExps(sce_sr, ifelse(is.spike, "ERCC", "gene"))
+
+# filter for QC score
+qcstats <- perCellQCMetrics(sce_sr)
+qc <- quickPerCellQC(qcstats, percent_subsets=c("altexps_ERCC_percent"))
+
+colData(sce_sr)$libsize <- qcstats$sum
+colData(sce_sr)$genes <- qcstats$detected
+
+filtered <- quickPerCellQC(qcstats, percent_subsets="altexps_ERCC_percent")
+colSums(as.data.frame(filtered$discard))
+colSums(as.matrix(qc))
+sce_sr <- sce_sr[, !filtered$discard]
+
+# Remove genes that are not expressed
+sce_sr <- sce_sr[Matrix::rowSums(counts(sce_sr)) > 0,]
+
+# Normalization.
+sce_sr <- computeSpikeFactors(sce_sr, "ERCC")
+summary(sizeFactors(sce_sr))
+sce_sr <- logNormCounts(sce_sr)
+
+# Save RDS
+saveRDS(sce_sr, "~/SCE_sr.rds")
+```
+
+
+# Form an SCE for genes specifically
+```{r}
+# define repeats
+is.repeat <- !grepl("^ENS", rownames(sce_sr))
+# split SCE into repeats and genes
+sce_sr <- splitAltExps(sce_sr, ifelse(is.repeat, "repeat", "gene"))
+# define genic SCE
+sce_sr_gene <- swapAltExp(sce_sr, name="gene", saved="repeat")
+rownames(sce_sr_gene) <- rownames(sce_sr_gene)[!duplicated(rownames(sce_sr_gene))]
+
+# filter for QC score for genes only
+qcstats <- perCellQCMetrics(sce_sr_gene)
+qc <- quickPerCellQC(qcstats, percent_subsets=c("altexps_ERCC_percent"))
+colData(sce_sr_gene)$libsize <- qcstats$sum
+colData(sce_sr_gene)$genes <- qcstats$detected
+
+filtered <- quickPerCellQC(qcstats, percent_subsets="altexps_ERCC_percent")
+colSums(as.data.frame(filtered$discard))
+sce_sr_gene <- sce_sr[, !filtered$discard]
+
+# Remove genes that are not expressed
+sce_sr_gene <- sce_sr_gene[Matrix::rowSums(counts(sce_sr_gene)) > 0,]
+
+# Normalization.
+sce_sr_gene <- computeSpikeFactors(sce_sr_gene, "ERCC")
+summary(sizeFactors(sce_sr_gene))
+sce_sr_gene <- logNormCounts(sce_sr_gene)
+
+# save RDS
+saveRDS(sce_sr_gene, "~/sce_sr_gene.rds")
+```

@@ -1,0 +1,127 @@
+---
+title: "compare ScNAUmi-seq and CELLO-seq"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/ScNAUmi_vs_CELLOseq.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r cars}
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+library(stringr)
+library(biomaRt)
+library(SingleCellExperiment)
+library(scRNAseq)
+library(tidyr)
+library(dplyr)
+library("DropletUtils")
+
+rm(list=ls())
+```
+
+## Introduction
+Try to perform transposable element calling with short read data.
+
+# Read in ScNaUmi-seq data.
+```{r}
+ScNaUmi_seq <- readRDS("~/scNaUMIseq_genic_gencode_full_intergenicTE.rds")
+
+#QC
+unfiltered <- ScNaUmi_seq
+stats <- perCellQCMetrics(ScNaUmi_seq)
+qc <- quickPerCellQC(stats)
+colData(ScNaUmi_seq)$libsize <- stats$sum
+colData(ScNaUmi_seq)$genes <- stats$detected
+ScNaUmi_seq <- ScNaUmi_seq[,!qc$discard]
+
+# Remove genes that are not expressed
+ScNaUmi_seq <- ScNaUmi_seq[Matrix::rowSums(counts(ScNaUmi_seq)) > 0,]
+ScNaUmi_seq <- scater::addPerFeatureQC(ScNaUmi_seq)
+rowData(ScNaUmi_seq)
+
+# Normalisation
+snumiseq_sce <- computeSumFactors(ScNaUmi_seq)
+summary(sizeFactors(ScNaUmi_seq))
+ScNaUmi_seq <- logNormCounts(ScNaUmi_seq)
+assayNames(ScNaUmi_seq)
+
+# filter for L1s
+toMatch <- c("^L1Md_T", "L1Md_A")
+
+ScNaUmi_seq_L1Md <- ScNaUmi_seq[grepl(paste(toMatch,collapse="|"), rownames(ScNaUmi_seq)),]
+ScNaUmi_seq_L1Md <- ScNaUmi_seq_L1Md[grepl("chr", rownames(ScNaUmi_seq_L1Md)),]
+ScNaUmi_seq_L1Md_exp <- ScNaUmi_seq_L1Md[Matrix::rowSums(counts(ScNaUmi_seq_L1Md)) > 0,]
+
+# add length information to TE annotation
+counts_ScNaUmi_seq_L1Md <- data.frame(as.matrix(counts(ScNaUmi_seq_L1Md_exp)))
+counts_ScNaUmi_seq_L1Md$name <-rownames(counts_ScNaUmi_seq_L1Md)
+counts_ScNaUmi_seq_L1Md$start_end <-  str_extract(rownames(counts_ScNaUmi_seq_L1Md), 'chr.*')
+counts_ScNaUmi_seq_L1Md$start_end <-  gsub("chr.*_", "", counts_ScNaUmi_seq_L1Md$start_end)
+counts_ScNaUmi_seq_L1Md$start <- sapply(strsplit(as.character(counts_ScNaUmi_seq_L1Md$start_end),'-'), "[", 1)
+counts_ScNaUmi_seq_L1Md$end <- sapply(strsplit(as.character(counts_ScNaUmi_seq_L1Md$start_end),'-'), "[", 2)
+counts_ScNaUmi_seq_L1Md$length <- as.numeric(counts_ScNaUmi_seq_L1Md$end) - as.numeric(counts_ScNaUmi_seq_L1Md$start)
+
+#filter by L1s > 5800bp
+counts_ScNaUmi_seq_L1Md_long <- counts_ScNaUmi_seq_L1Md[counts_ScNaUmi_seq_L1Md$length>5800,]
+counts_ScNaUmi_seq_L1Md_long_ordered <- counts_ScNaUmi_seq_L1Md_long[order(-rowMeans(counts_ScNaUmi_seq_L1Md_long[1:800])),]
+
+#subset top 50 expressed L1s
+counts_ScNaUmi_seq_L1Md_long_ordered_50 <- counts_ScNaUmi_seq_L1Md_long_ordered[1:50,]
+counts_ScNaUmi_seq_L1Md_long_ordered_50_melt <- melt(counts_ScNaUmi_seq_L1Md_long_ordered_50[1:801])
+
+#save RDS file
+saveRDS(counts_ScNaUmi_seq_L1Md_long_ordered_50_melt, "~/counts_ScNaUmi_seq_L1Md_long_ordered_50_melt.rds")
+```
+
+# read in 2i data - 22nt Celloseq
+```{r}
+celloseq_22nt_2i_sce <- readRDS("~/SCE_lr.rds")
+
+# filter for L1s
+toMatch <- c("^L1Md_T", "L1Md_A")
+
+celloseq_22nt_2i_sce_L1Md <- celloseq_22nt_2i_sce[grepl(paste(toMatch,collapse="|"), rownames(celloseq_22nt_2i_sce)),]
+celloseq_22nt_2i_sce_L1Md <- celloseq_22nt_2i_sce_L1Md[grepl("chr", rownames(celloseq_22nt_2i_sce_L1Md)),]
+celloseq_22nt_2i_sce_L1Md_exp <- celloseq_22nt_2i_sce_L1Md[Matrix::rowSums(counts(celloseq_22nt_2i_sce_L1Md)) > 0,]
+
+# add length information to TE annotation
+counts_22nt_L1Md <- data.frame(as.matrix(counts(celloseq_22nt_2i_sce_L1Md_exp)))
+counts_22nt_L1Md$name <-rownames(counts_22nt_L1Md)
+counts_22nt_L1Md <- counts_22nt_L1Md[rowSums(counts_22nt_L1Md[1:281])>1,]
+counts_22nt_L1Md$start_end <-  str_extract(rownames(counts_22nt_L1Md), 'chr.*')
+counts_22nt_L1Md$start_end <-  gsub("chr.*_", "", counts_22nt_L1Md$start_end)
+counts_22nt_L1Md$start <- sapply(strsplit(as.character(counts_22nt_L1Md$start_end),'-'), "[", 1)
+counts_22nt_L1Md$end <- sapply(strsplit(as.character(counts_22nt_L1Md$start_end),'-'), "[", 2)
+counts_22nt_L1Md$length <- as.numeric(counts_22nt_L1Md$end) - as.numeric(counts_22nt_L1Md$start)
+
+#filter by L1s > 5800bp
+counts_22nt_L1Md_long <- counts_22nt_L1Md[counts_22nt_L1Md$length>5800,]
+counts_22nt_L1Md_long_ordered <- counts_22nt_L1Md_long[order(-rowMeans(counts_22nt_L1Md_long[1:281])),]
+
+#subset top 50 expressed L1s
+counts_22nt_L1Md_long_ordered_50 <- counts_22nt_L1Md_long_ordered[1:50,]
+counts_22nt_L1Md_long_ordered_50_melt <- melt(counts_22nt_L1Md_long_ordered_50[1:282])
+
+#save RDS file
+saveRDS(counts_22nt_L1Md_long_ordered_50_melt, "~/counts_22nt_L1Md_long_ordered_50_melt.rds")
+```
+
+

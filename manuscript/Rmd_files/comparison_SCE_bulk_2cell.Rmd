@@ -1,0 +1,255 @@
+---
+title: "comparison_SCE_bulk_2cell"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/comparison_sce_bulk_2cell.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r, include=FALSE}
+library(reshape2)
+library(Matrix)
+library(irlba)
+library("biomaRt")
+library("edgeR")
+library("tidyr")
+library("ggplot2")
+library(ComplexHeatmap)
+library(circlize)
+library(stringr)
+library(dplyr)
+library(ggsignif)
+library(broom)
+library(ggpubr)
+library("Hmisc")
+library(ggbeeswarm)
+theme_set(theme_classic(base_size = 15))
+rm(list=ls())
+```
+
+
+# could define a set of high confidence MERVL and HERVH transcripts, respectively, and then report how many of these are detected per cell, and collectively. 
+
+
+## load data
+```{r}
+bulk_TElocal_2cell <- readRDS("~/2cell_paired_gencode_full_intergenic_featureCount_output_matrix.rds")
+
+counts_lr_2cell_repeat_isoforms_merged_repeats <-readRDS( "~/counts_lr_2cell_repeat_isoforms_merged_repeats.rds")
+
+# filter against amanitin
+bulk_TElocal_2cell_filtered <-  bulk_TElocal_2cell[,!grepl("*GSE76687*", colnames(bulk_TElocal_2cell))]
+bulk_TElocal_2cell_filtered <-  bulk_TElocal_2cell_filtered[,!grepl("*GSE53386*", colnames(bulk_TElocal_2cell_filtered))]
+bulk_TElocal_2cell_filtered <-  bulk_TElocal_2cell_filtered[,!grepl("*GSE45719*", colnames(bulk_TElocal_2cell_filtered))]
+
+```
+
+
+# Filter TEs by length, expression, name
+```{r}
+# in buld data
+bulk_TElocal_2cell_filtered_MERVL <- bulk_TElocal_2cell_filtered[grepl("MERVL", rownames(bulk_TElocal_2cell)),]
+bulk_TElocal_2cell_filtered_MERVL$unique_name <- rownames(bulk_TElocal_2cell_filtered_MERVL)
+
+# add genomic location to bulk data
+bulk_TElocal_2cell_filtered_MERVL$short_name <- sapply(strsplit(as.character(bulk_TElocal_2cell_filtered_MERVL$unique_name), "-"),"[", 2)
+bulk_TElocal_2cell_filtered_MERVL$chromosome <- sapply(strsplit(as.character(bulk_TElocal_2cell_filtered_MERVL$short_name), "_"),"[", 2)
+bulk_TElocal_2cell_filtered_MERVL$start_position <- sapply(strsplit(as.character(bulk_TElocal_2cell_filtered_MERVL$short_name), "_"),"[", 3)
+bulk_TElocal_2cell_filtered_MERVL$end_position <- sapply(strsplit(as.character(bulk_TElocal_2cell_filtered_MERVL$unique_name), "-"),"[", 3)
+bulk_TElocal_2cell_filtered_MERVL$length <- as.integer(bulk_TElocal_2cell_filtered_MERVL$end_position)-as.integer(bulk_TElocal_2cell_filtered_MERVL$start_position)
+bulk_TElocal_2cell_filtered_MERVL_5kb <- bulk_TElocal_2cell_filtered_MERVL[bulk_TElocal_2cell_filtered_MERVL$length>5000,]
+
+bulk_TElocal_2cell_filtered_MERVL_5kb <- bulk_TElocal_2cell_filtered_MERVL_5kb[grepl("^chr", bulk_TElocal_2cell_filtered_MERVL_5kb$chromosome),]
+
+          
+# in Celloseq data
+counts_lr_2cell_repeat_isoforms_merged_repeats <- counts_lr_2cell_repeat_isoforms_merged_repeats[grepl("MERVL", counts_lr_2cell_repeat_isoforms_merged_repeats$repeat_ids),]
+
+# merge datasets by genomic location
+bulk_cello_2cell_mervl <- left_join(bulk_TElocal_2cell_filtered_MERVL_5kb,counts_lr_2cell_repeat_isoforms_merged_repeats, by=c("unique_name" = "repeat_ids"))
+bulk_cello_2cell_mervl$expressed <- ifelse(is.na(bulk_cello_2cell_mervl$rows)==TRUE,"not_expressed", "expressed")
+bulk_cello_2cell_mervl_not_expressed <- bulk_cello_2cell_mervl %>% filter(is.na(ids))
+write.table(bulk_cello_2cell_mervl_not_expressed, "~/GSE97778/bulk_cello_2cell_mervl_not_expressed.txt", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+bulk_cello_2cell_mervl_bed <- data.frame(paste(bulk_cello_2cell_mervl$chromosome), as.integer(bulk_cello_2cell_mervl$start_position), as.integer(bulk_cello_2cell_mervl$end_position))
+
+# write out coordinates as bed file
+write.table(bulk_cello_2cell_mervl_bed, "~/bulk_cello_2cell_mervl_feature.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+```
+
+
+# Epigenetic marks
+
+# Modify WBGSseq data to be loaded
+```{r}
+
+# load wgbs dataset
+late_2cell_wgbs <- read.delim("~/GSE97778/GSM2588710_2cellLate.bsmap.CpG.bed")
+
+# add end colum
+late_2cell_wgbs$end <- late_2cell_wgbs$base
+late_2cell_wgbs$end <- late_2cell_wgbs$end +1
+late_2cell_wgbs$end <- as.integer(late_2cell_wgbs$end)
+
+# change column order
+late_2cell_wgbs <- late_2cell_wgbs[, c(1, 2, 5, 3, 4)]
+
+# write out bed file
+write.table(late_2cell_wgbs, "~/GSE97778/late_2cell_wgbs.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+early_2cell_wgbs <- read.delim("~/GSE97778/GSM2588709_2cellEarly.bsmap.CpG.bed")
+
+early_2cell_wgbs$end <- early_2cell_wgbs$base
+early_2cell_wgbs$end <- early_2cell_wgbs$end +1
+early_2cell_wgbs$end <- as.integer(early_2cell_wgbs$end)
+early_2cell_wgbs <- early_2cell_wgbs[, c(1, 2, 5, 3, 4)]
+
+write.table(early_2cell_wgbs, "~/GSE97778/early_2cell_wgbs.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+
+```
+
+# load in all the public datasets from 
+```{r}
+#load data
+mydir = "~/GSE71434/"
+myfiles = list.files(path=mydir, pattern="*mervl.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE71434_mervl = Reduce(merge, counts_sr)
+colnames(GSE71434_mervl) <- c("chr", "start", "end", "H3K4me3_early", "H3K4me3_late")
+GSE71434_mervl[,4:5] <- sapply(GSE71434_mervl[,4:5],as.numeric)
+
+
+mydir = "~/2cell/GSE66390/"
+myfiles = list.files(path=mydir, pattern="*mervl.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE66390_mervl = Reduce(merge, counts_sr)
+colnames(GSE66390_mervl) <- c("chr", "start", "end", "ATACseq_early_2cell_1", "ATACseq_early_2cell_2", "ATACseq_2cell_1", "ATACseq_2cell_2", "H3K27me3_2cell")
+GSE66390_mervl[,4:8] <- sapply(GSE66390_mervl[,4:8],as.numeric)
+GSE66390_mervl$ATACseq <-  rowMeans(GSE66390_mervl[,c(4:7)], na.rm=TRUE)
+GSE66390_mervl <- GSE66390_mervl[, c(1, 2, 3, 9)]
+
+mydir = "~/2cell/GSE73952/"
+myfiles = list.files(path=mydir, pattern="*mervl.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE73952_mervl = Reduce(merge, counts_sr)
+colnames(GSE73952_mervl) <- c("chr", "start", "end", "H3K4me3_early_2cell_1", "H3K4me3_early_2cell_2", "H3K4me3_early_2cell_3", "H3K27me3_early_2cell_1", "H3K27me3_early_2cell_2", "H3K27me3_early_2cell_3")
+GSE73952_mervl[,4:9] <- sapply(GSE73952_mervl[,4:9],as.numeric)
+GSE73952_mervl$H3K4me3 <-  rowMeans(GSE73952_mervl[,c(4:6)], na.rm=TRUE)
+GSE73952_mervl$H3K27me3 <-  rowMeans(GSE73952_mervl[,c(7:9)], na.rm=TRUE)
+GSE73952_mervl <- GSE73952_mervl[, c(1, 2, 3, 10, 11)]
+
+
+mydir = "~/2cell/GSE76687/"
+myfiles = list.files(path=mydir, pattern="*mervl.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE76687_mervl = Reduce(merge, counts_sr)
+GSE76687_mervl <- GSE76687_mervl[, c(1, 2, 3, 5:8)]
+colnames(GSE76687_mervl) <- c("chr", "start", "end",  "H3K27me3_early", "H3K27me3_2cell_1", "H3K27me3_2cell_2", "H3K27me3_late")
+GSE76687_mervl[,4:7] <- sapply(GSE76687_mervl[,4:7],as.numeric)
+GSE76687_mervl$H3K27me3<-  rowMeans(GSE76687_mervl[,c(5:6)], na.rm=TRUE)
+GSE76687_mervl <- GSE76687_mervl[, c(1, 2, 3, 4,7, 8)]
+
+mydir = "~/2cell/GSE97778/"
+myfiles = list.files(path=mydir, pattern="*mervl.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE97778_mervl = Reduce(merge, counts_sr)
+GSE97778_mervl <- GSE97778_mervl[, c(1, 2, 3, 8, 19, 11:15)]
+colnames(GSE97778_mervl) <- c("chr", "start", "end","early_2cell_wgbs","late_2cell_wgbs", "H3K9me3_2cell_1", "H3K9me3_2cell_2", "H3K9me3_early_2cell_1", "H3K9me3_early_2cell_2", "H3K9me3_late_2cell_1", "H3K9me3_late_2cell_2","H3K9me3_late_2cell_3")
+GSE97778_mervl[,4:12] <- sapply(GSE97778_mervl[,4:12],as.numeric)
+GSE97778_mervl$H3K9me3 <-  rowMeans(GSE97778_mervl[,c(6:7)], na.rm=TRUE)
+GSE97778_mervl$H3K9me3_early <-  rowMeans(GSE97778_mervl[,c(8:10)], na.rm=TRUE)
+GSE97778_mervl$H3K9me3_late <-  rowMeans(GSE97778_mervl[,c(11:12)], na.rm=TRUE)
+GSE97778_mervl <- GSE97778_mervl[, c(1, 2, 3, 4, 5, 13)]
+```
+
+# merge RNAseq and epigenetic modifications
+```{r}
+# no genic expressed MERVL
+bulk_cello_2cell_mervl_nogene <- read.delim("~/2cell/bulk_cello_2cell_mervl_nogene.bed")
+bulk_cello_2cell_mervl_nogene <- bulk_cello_2cell_mervl_nogene %>%
+  unite("chromosome.start", Chromosome:Start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:End, sep="-") 
+
+
+bulk_cello_2cell_mervl <- bulk_cello_2cell_mervl %>%
+  unite("chromosome.start", chromosome:start_position, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end_position, sep="-") 
+
+bulk_cello_2cell_mervl_merged <- bulk_cello_2cell_mervl %>% 
+  left_join(bulk_cello_2cell_mervl_nogene, by = "chromosome.start.stop")
+
+
+bulk_cello_2cell_mervl_ordered <- bulk_cello_2cell_mervl[order(bulk_cello_2cell_mervl[, "chromosome.start.stop"]), , drop = FALSE]
+
+GSE71434_mervl_location <- GSE71434_mervl %>%
+  unite("chromosome.start", chr:start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end, sep="-")
+
+GSE66390_mervl_location <- GSE66390_mervl %>%
+  unite("chromosome.start", chr:start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end, sep="-")
+
+
+GSE73952_mervl_location <- GSE73952_mervl %>%
+  unite("chromosome.start", chr:start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end, sep="-") 
+
+GSE76687_mervl_location <- GSE76687_mervl %>%
+  unite("chromosome.start", chr:start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end, sep="-") 
+
+GSE97778_mervl_location <- GSE97778_mervl %>%
+  unite("chromosome.start", chr:start, sep=":") %>%
+  unite("chromosome.start.stop", chromosome.start:end, sep="-")
+
+
+bulk_cello_2cell_mervl_epi <- bulk_cello_2cell_mervl_ordered %>% 
+  left_join(GSE66390_mervl_location, by = "chromosome.start.stop") %>%
+  left_join(GSE73952_mervl_location, by = "chromosome.start.stop") %>%
+  left_join(GSE97778_mervl_location, by = "chromosome.start.stop")
+```
+
+# merge datasets and normalise expression
+```{r}
+corr_matrix <- data.frame(bulk_cello_2cell_mervl_epi[1:9], bulk_cello_2cell_mervl_epi[15:20], bulk_cello_2cell_mervl_epi[26:31])
+
+corr_matrix[is.na(corr_matrix)] <- 0
+
+corr_matrix_colsums<- colSums(corr_matrix[1:15])
+corr_matrix_per_million <- corr_matrix_colsums/1000000
+corr_matrix[1:15] <- mapply('/', corr_matrix[1:15], corr_matrix_per_million)
+corr_matrix[1:15] <- log2(corr_matrix[1:15]+1)
+corr_matrix[is.na(corr_matrix)] <- 0 
+```
+
+
+# Number of transcripts per MERVL element per cell
+```{r}
+counts_n_mervl <- sapply(corr_matrix[1:15], function(x) sum(x > 0))
+counts_n_mervl_melt_bulk <- reshape::melt(counts_n_mervl)
+counts_n_mervl_melt_bulk$variable <- ifelse(grepl("^barcode", rownames(counts_n_mervl_melt_bulk))==TRUE,"CELLO-seq", "published bulk data")
+
+saveRDS(counts_n_mervl_melt_bulk, "~/counts_n_mervl_melt_bulk.rds")
+
+bulk_cello_2cell_mervl_epi$Wang_2018 <- rowMeans(bulk_cello_2cell_mervl_epi[,6:9])
+bulk_cello_2cell_mervl_epi$Wu_2016 <- rowMeans(bulk_cello_2cell_mervl_epi[,1:3])
+bulk_cello_2cell_mervl_epi$Zhang_2016 <- rowMeans(bulk_cello_2cell_mervl_epi[,4:5])
+cello_2cell_mervl_epi_melt <- reshape::melt(bulk_cello_2cell_mervl_epi[, c(25:34)], by="expressed")
+
+cello_2cell_mervl_epi_melt$dataset <- ifelse(grepl("ATAC", cello_2cell_mervl_epi_melt$variable)==TRUE, "ATAC-seq",ifelse(grepl("wgbs", cello_2cell_mervl_epi_melt$variable)==TRUE,"DNA_methylation",ifelse(grepl("H3K4", cello_2cell_mervl_epi_melt$variable)==TRUE,"H3K4me3", ifelse(grepl("H3K27", cello_2cell_mervl_epi_melt$variable)==TRUE,"H3K27me3",ifelse(grepl("H3K9", cello_2cell_mervl_epi_melt$variable)==TRUE,"H3K9me3", "RNAseq")))))
+table(cello_2cell_mervl_epi_melt$dataset)
+
+saveRDS(cello_2cell_mervl_epi_melt, "~/cello_2cell_mervl_epi_melt.rds")
+```
+

@@ -1,0 +1,130 @@
+---
+title: "preprocessing_repeat_files"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/preprocessing_repeat_files.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(SingleCellExperiment)
+rm(list=ls())
+```
+
+# Mouse repeats
+filter repeatmasker GTF file from UCSC after preprocessing to calculate age of TEs with age_TE_jukescantor.py
+```{r}
+mouse_TE_age <- read.delim2("~/mm10_repeatmasker_ucsc.rmsk.jc.txt", header=FALSE, sep="\t", stringsAsFactors = FALSE) %>% drop_na()
+
+colnames(mouse_TE_age) <- c("chromosome_name", "start_position", "end_position", "name", "repFamily", "repClass", "strand", "substitution_proportion", "jc_distance")
+
+# substitution rate of mouse genome from Waterston et al., 2002
+mouse_TE_age$jc_distance <- as.numeric(mouse_TE_age$jc_distance)
+mouse_TE_age$mya <- (mouse_TE_age$jc_distance*100)/(4.5*2*100)*1000
+
+# filter repeat annotation file
+mouse_TE_age$repFamily <- gsub("\\?","", mouse_TE_age$repFamily)
+mouse_TE_age$repClass <- gsub("\\?","", mouse_TE_age$repClass)
+mouse_TE_age_filtered <- mouse_TE_age[!mouse_TE_age$repFamily == "Simple_repeat",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repClass == "Low_complexity",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repClass == "RNA",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repClass == "RC",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repClass == "Unknown",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "Other",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "srpRNA",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "snRNA",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "scRNA",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "tRNA",]
+mouse_TE_age_filtered <- mouse_TE_age_filtered[!mouse_TE_age_filtered$repFamily == "rRNA",]
+saveRDS(mouse_TE_age_filtered, "~/mouse_TE_age_filtered.rds")
+
+# L1Md 
+mouse_TE_age_filtered_L1Md <- mouse_TE_age_filtered[grep("^L1Md", mouse_TE_age_filtered$name),]
+saveRDS(mouse_TE_age_filtered_L1Md, "~/mouse_TE_age_filtered_L1Md.rds")
+```
+
+# Human data
+filter repeatmasker GTF file from UCSC after preprocessing to calculate age of TEs with age_TE_jukescantor.py
+```{r}
+human_TE_age <- read.delim2("~/GRCh38_repeats_20200708.rmsk.jc.txt", header=FALSE, sep="\t", stringsAsFactors = FALSE) %>% drop_na()
+
+colnames(human_TE_age) <- c("chromosome_name", "start_position", "end_position", "name", "repFamily", "repClass", "strand", "substitution_proportion", "jc_distance")
+
+# substitution rate of human genome from Lander et al., 2001
+human_TE_age$jc_distance <- as.numeric(human_TE_age$jc_distance)
+human_TE_age$mya <- (human_TE_age$jc_distance*100)/(2.2*2*100)*1000
+
+# filter repeat annotation file
+human_TE_age$repFamily <- gsub("\\?","", human_TE_age$repFamily)
+human_TE_age$repClass <- gsub("\\?","", human_TE_age$repClass)
+human_TE_age_filtered <- human_TE_age[!human_TE_age$repFamily == "Simple_repeat",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repClass == "Low_complexity",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repClass == "RNA",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repClass == "RC",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repClass == "Unknown",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "Other",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "srpRNA",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "snRNA",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "scRNA",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "tRNA",]
+human_TE_age_filtered <- human_TE_age_filtered[!human_TE_age_filtered$repFamily == "rRNA",]
+saveRDS(human_TE_age_filtered, "~/human_TE_age_filtered.rds")
+
+# L1 annotation
+human_TE_age_filtered_L1PA <- human_TE_age_filtered[grepl("^L1PA", human_TE_age_filtered$name),]
+human_TE_age_filtered_L1HS <- human_TE_age_filtered[grepl("^L1HS", human_TE_age_filtered$name),]
+human_TE_age_filtered_youngTE <- rbind(human_TE_age_filtered_L1PA, human_TE_age_filtered_L1HS)
+saveRDS(human_TE_age_filtered_youngTE, "~/human_TE_age_filtered_youngTE.rds")
+```
+
+
+# assign location to SCE objects for repeats
+```{r}
+# load in single cell object with all features
+SCE_lr_all <- readRDS("~/SCE_lr_all.rds")
+# define repeats
+is.repeat <- rowData(SCE_lr_all)$value == "repeats"
+# make SCE for repeats
+SCE_lr_repeats <- splitAltExps(SCE_lr_all, ifelse(is.repeat, "repeats", "gene"))
+
+#save
+saveRDS(SCE_lr_repeats, "~/SCE_lr_repeats.rds") 
+
+# extract counts and logcounts
+counts_SCE_lr_repeats <- data.frame(counts(SCE_lr_repeats))
+logcounts_SCE_lr_repeats <- data.frame(logcounts(SCE_lr_repeats))
+
+# add genomic location to all TEs in SCE for logcounts
+logcounts_SCE_lr_repeats$chromosome_name = str_extract(rownames(logcounts_SCE_lr_repeats), pattern = "chr[0-9]+|chrX|chrY")
+location <- sapply(strsplit(rownames(logcounts_SCE_lr_repeats), "_chr[0-9]+_|_chrX_|_chrY_"), "[", 2)
+logcounts_SCE_lr_repeats$start_position <- sapply(strsplit(location, "-"),"[", 1)
+logcounts_SCE_lr_repeats$end_position <- sapply(strsplit(location, "-"),"[", 2)
+logcounts_SCE_lr_repeats$end_position <- as.numeric(logcounts_SCE_lr_repeats$end_position)
+logcounts_SCE_lr_repeats$start_position <- as.numeric(logcounts_SCE_lr_repeats$start_position)
+logcounts_SCE_lr_repeats$name <- sapply(strsplit(rownames(logcounts_SCE_lr_repeats), "_chr"), "[", 1)
+
+# add genomic location to all TEs in SCE for counts
+counts_SCE_lr_repeats$chromosome_name = str_extract(rownames(counts_SCE_lr_repeats), pattern = "chr[0-9]+|chrX|chrY")
+location <- sapply(strsplit(rownames(counts_SCE_lr_repeats), "_chr[0-9]+_|_chrX_|_chrY_"), "[", 2)
+counts_SCE_lr_repeats$start_position <- sapply(strsplit(location, "-"),"[", 1)
+counts_SCE_lr_repeats$end_position <- sapply(strsplit(location, "-"),"[", 2)
+counts_SCE_lr_repeats$end_position <- as.numeric(counts_SCE_lr_repeats$end_position)
+counts_SCE_lr_repeats$start_position <- as.numeric(counts_SCE_lr_repeats$start_position)
+counts_SCE_lr_repeats$name <- sapply(strsplit(rownames(counts_SCE_lr_repeats), "_chr"), "[", 1)
+
+saveRDS(logcounts_SCE_lr_repeats, "~/logcounts_lr_repeats.rds")
+saveRDS(counts_SCE_lr_repeats, "~/counts_lr_repeats.rds") 
+```

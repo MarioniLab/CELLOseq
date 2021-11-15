@@ -40,7 +40,7 @@ We will now perform quality control of the reads itself.
 
 ```{r}
 library(Biostrings)
-(reads <- readQualityScaledDNAStringSet(paste0(INDEX))
+(reads <- readQualityScaledDNAStringSet(paste0(INDEX)))
 ```
 
 We will look at the number of reads:
@@ -69,9 +69,9 @@ reads <- reads[N]
 We need to pre-process the adaptor sequence to avoid issues with `N`s. This is because `Biostrings` pairwise alignment machinery uses quality scores, for which `N`s need to have low scores.
 
 ```{r}
-not.N <- strsplit(adap.seq, "")[[1]]!="N"
+not.N <- strsplit(adaptor, "")[[1]]!="N"
 adap.scores <- PhredQuality(not.N*21L)
-(adap <- QualityScaledDNAStringSet(adap.seq, adap.scores))
+(adap <- QualityScaledDNAStringSet(adaptor, adap.scores))
 ```
 
 We also create a reverse-complemented (RC) adaptor sequence, for alignment to the other strand of the reported read sequence.

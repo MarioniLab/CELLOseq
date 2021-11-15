@@ -1,0 +1,215 @@
+---
+title: "Mobile_reference_L1s_published"
+author: "Rebecca Berrens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/mobile_reference_L1s_published.html') })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r, include=FALSE}
+library("tidyr")
+library("ggplot2")
+library(stringr)
+library(dplyr)
+library(liftOver)
+library(ComplexHeatmap)
+theme_set(theme_classic(base_size = 15))
+rm(list=ls())
+```
+
+
+# Find overlap between L1s expressed in Celloseq and published data to see whether young L1s are mobile 
+
+# Human data.
+## load data
+```{r}
+GRCh38_competent_loci_published <- read.delim("~/GRCh38_competent_loci_published.bed", header =FALSE, stringsAsFactors = FALSE, sep=" ")
+logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high <- readRDS("~/logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high.rds")
+```
+
+# Overlap between known mobile L1s in 
+- Rodriguez-Martin_2020
+- Sanchez-Luque_2019
+- Gardner_2017
+- Philippe_2016
+- Tubio_2014
+- MacFarlane_2013
+- Helman_2013
+- Solyom_2012b
+- Beck_2010
+- Brouha_2003
+
+```{r}
+# this is a list of all competent L1s
+GRCh38_competent_loci_published <- GRCh38_competent_loci_published[,1:7]
+colnames(GRCh38_competent_loci_published) <- c("chr", "start", "end", "name", "strand", "ref_1", "ref_2")
+GRCh38_competent_loci_published$start <- GRCh38_competent_loci_published$start
+GRCh38_competent_loci_published$location <- paste(GRCh38_competent_loci_published$chr, GRCh38_competent_loci_published$start, sep="_")
+
+logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$start_position <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$start_position-1
+logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$location <- paste(logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$chromosome_name, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$start_position, sep="_")
+
+mobile_ref_L1_celloseq_overlap <- intersect(GRCh38_competent_loci_published$location, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$location)
+mobile_ref_L1_celloseq <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high[logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$location %in% mobile_ref_L1_celloseq_overlap,]
+mobile_ref_L1 <- GRCh38_competent_loci_published[GRCh38_competent_loci_published$location %in% mobile_ref_L1_celloseq_overlap,]
+
+Rodriguez_Martin_2020_GRCh38 <- read.delim("~/Rodriguez_Martin_2020_GRCh38.bed", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+overlap <- intersect(Rodriguez_Martin_2020_GRCh38$V3, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+```
+
+# Overlap with methylation data based on Sanchez-Luque
+
+```{r}
+#Sanchez_Luque_2019
+Sanchez_Luque_2019_mm9_het <- read.delim("~/Sanchez_Luque_het_NF_L1.bed.txt", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+Sanchez_Luque_2019_mm9_het$V1 <- gsub("^", "chr", Sanchez_Luque_2019_mm9_het$V1)
+write.table(Sanchez_Luque_2019_mm9_het, "~/Sanchez_Luque_2019_mm9_het.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+Sanchez_Luque_2019_mm9_5_trunc <- read.delim("~/Sanchez_Luque_5_trunc.bed", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+Sanchez_Luque_2019_mm9_5_trunc$V1 <- gsub("^", "chr", Sanchez_Luque_2019_mm9_5_trunc$V1)
+write.table(Sanchez_Luque_2019_mm9_5_trunc, "~/Sanchez_Luque_2019_mm9_5_trunc.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+Sanchez_Luque_2019_GRCh38_het <- read.delim("~/Sanchez_Luque_2019_GRCh38_het.bed", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+Sanchez_Luque_2019_GRCh38_5_trunc <- read.delim("~/Sanchez_Luque_2019_GRCh38_5_trunc.bed", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+
+Sanchez_Luque_2019_GRCh38_somatic <- data.frame("chr3",	"96483847",	"96484120")
+colnames(Sanchez_Luque_2019_GRCh38_somatic) <- c("chr",    "start",      "end"   )
+
+Sanchez_Luque_5_trunc_celloseq_overlap <- intersect(Sanchez_Luque_2019_GRCh38_5_trunc$V3, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+Sanchez_Luque_5_trunc_celloseq <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high[logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position %in% Sanchez_Luque_5_trunc_celloseq_overlap,]
+Sanchez_Luque_5_trunc <- Sanchez_Luque_2019_GRCh38_5_trunc[Sanchez_Luque_2019_GRCh38_5_trunc$V3 %in% Sanchez_Luque_5_trunc_celloseq_overlap,]
+
+Sanchez_Luque_het_celloseq_overlap <- intersect(Sanchez_Luque_2019_GRCh38_het$V3, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+Sanchez_Luque_het_celloseq <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high[logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position %in% Sanchez_Luque_5_trunc_celloseq_overlap,]
+
+Sanchez_Luque_somatic_celloseq_overlap <- intersect(Sanchez_Luque_2019_GRCh38_somatic$end, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+```
+
+Get DNA methylation from other datasets
+```{r}
+# make bed file to interesect
+logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_high_L1_bed <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high[,1:3]
+write.table(logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_high_L1_bed, "~/logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_high_L1.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+
+
+#Ewing 2020 dataset
+Ewing_2020_GRCh38_cancer <- read.delim("~/ewing_2020_ref_cancer_tissue.txt", header =TRUE, stringsAsFactors = FALSE, sep="\t")
+Ewing_2020_GRCh38_tissue <- read.delim("~/ewing_2020_ref_met_tissue.txt", header =TRUE, stringsAsFactors = FALSE, sep="\t")
+
+toMatch <- c("^L1PA", "^L1HS")
+Ewing_2020_GRCh38_tissue_L1 <- Ewing_2020_GRCh38_tissue[grepl(paste(toMatch,collapse="|"), Ewing_2020_GRCh38_tissue$seg_name), ]
+Ewing_2020_GRCh38_cancer_L1 <- Ewing_2020_GRCh38_cancer[grepl(paste(toMatch,collapse="|"), Ewing_2020_GRCh38_cancer$seg_name), ]
+
+Ewing_2020_GRCh38_tissue_L1_celloseq_overlap <- intersect(Ewing_2020_GRCh38_tissue_L1$seg_end, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+Ewing_2020_GRCh38_cancer_L1_celloseq_overlap <- intersect(Ewing_2020_GRCh38_cancer_L1$seg_end, logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$end_position)
+Ewing_2020_GRCh38_tissue_L1_celloseq <- Ewing_2020_GRCh38_tissue_L1[Ewing_2020_GRCh38_tissue_L1$seg_end %in% Ewing_2020_GRCh38_tissue_L1_celloseq_overlap,]
+Ewing_2020_GRCh38_tissue_L1_celloseq_bed <- data.frame(Ewing_2020_GRCh38_tissue_L1_celloseq$seg_chrom, Ewing_2020_GRCh38_tissue_L1_celloseq$seg_start, Ewing_2020_GRCh38_tissue_L1_celloseq$seg_end, Ewing_2020_GRCh38_tissue_L1_celloseq$hc5413_methfrac, Ewing_2020_GRCh38_tissue_L1_celloseq$li5413_methfrac, Ewing_2020_GRCh38_tissue_L1_celloseq$he5413_methfrac)
+write.table(Ewing_2020_GRCh38_tissue_L1_celloseq_bed, "~/Ewing_2020_GRCh38_tissue_L1_celloseq.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+colnames(Ewing_2020_GRCh38_tissue_L1_celloseq_bed) <- c("chromosome_name", "start_position", "end_position", "hippocampus" ,"liver" ,"heart")
+Ewing_2020_GRCh38_tissue_L1_celloseq_bed <- Ewing_2020_GRCh38_tissue_L1_celloseq_bed[, c(1, 2, 3, 4, 6, 5)]
+
+Ewing_2020_GRCh38_cancer_L1_celloseq <- Ewing_2020_GRCh38_cancer_L1[Ewing_2020_GRCh38_cancer_L1$seg_end %in% Ewing_2020_GRCh38_cancer_L1_celloseq_overlap,]
+
+Ewing_2020_GRCh38_cancer_L1_celloseq_bed <- data.frame(Ewing_2020_GRCh38_cancer_L1_celloseq$seg_chrom, Ewing_2020_GRCh38_cancer_L1_celloseq$seg_start, Ewing_2020_GRCh38_cancer_L1_celloseq$seg_end, Ewing_2020_GRCh38_cancer_L1_celloseq$hcc33t_methfrac, Ewing_2020_GRCh38_cancer_L1_celloseq$hcc33nt_methfrac)
+write.table(Ewing_2020_GRCh38_cancer_L1_celloseq_bed, "~/Ewing_2020_GRCh38_cancer_L1_celloseq.bed", row.names = FALSE, col.names =FALSE, quote=FALSE, sep="\t")
+colnames(Ewing_2020_GRCh38_cancer_L1_celloseq_bed) <- c("chromosome_name", "start_position", "end_position", "hcc33_tumour",  "hcc33_non_tumour")
+
+#load data
+mydir = "~/GSE16256/"
+myfiles = list.files(path=mydir, pattern="*L1.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE,col.names=c("chr", "start", "end", basename(x))))
+GSE16256_L1 = Reduce(merge, counts_sr)
+colnames(GSE16256_L1) <- c("chromosome_name", "start_position", "end_position", "iPS_DF_19_11",  "iPS_DF_6_9", "iPS_DF_19.11.H3K27me3", "iPS_DF_6.9.H3K27me3", "iPS_DF_19.11.H3K4me3", "iPS_DF_6.9.H3K4me3", "iPS_DF_19.11.H3K9me3", "iPS_DF_6.9.H3K9me3")
+GSE16256_L1_met <- GSE16256_L1[,1:5]
+
+mydir = "~/GSE30340/"
+myfiles = list.files(path=mydir, pattern="*L1.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE,col.names=c("chr", "start", "end", basename(x))))
+GSE30340_L1 = Reduce(merge, counts_sr)
+GSE30340_L1 <- data.frame(GSE30340_L1$chr, GSE30340_L1$start, GSE30340_L1$end, GSE30340_L1$GSE30340_human_sperm_CpG_methylation_hg18.bedgraph_hg38.bed.sorted.bed_L1.bed)
+colnames(GSE30340_L1) <- c("chromosome_name", "start_position", "end_position","GSE30340_sperm")
+
+mydir = "~/GSE57097/"
+myfiles = list.files(path=mydir, pattern="*L1.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE,col.names=c("chr", "start", "end", basename(x))))
+GSE57097_L1 = Reduce(merge, counts_sr)
+colnames(GSE57097_L1) <- c("chromosome_name", "start_position", "end_position", "GSE57097_mature_sperm")
+GSE57097_L1$GSE57097_mature_sperm <- as.numeric(GSE57097_L1$GSE57097_mature_sperm)
+
+mydir = "~/JGAS000006/"
+myfiles = list.files(path=mydir, pattern="*L1.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE,col.names=c("chr", "start", "end", basename(x))))
+JGAS000006_L1 = Reduce(merge, counts_sr)
+JGAS000006_L1 <- JGAS000006_L1[, c(1, 2, 3, 5, 6, 7,8,9,4)]
+colnames(JGAS000006_L1) <- c("chromosome_name", "start_position", "end_position", "oocyte_1", "oocyte_2", "sperm_1", "sperm_2", "sperm_3", "blastocyst")
+JGAS000006_L1$oocyte <-  rowMeans(JGAS000006_L1[,c('oocyte_1', 'oocyte_2')], na.rm=TRUE)
+JGAS000006_L1$sperm <-  rowMeans(JGAS000006_L1[,c("sperm_1", "sperm_2", "sperm_3")], na.rm=TRUE)
+JGAS000006_L1 <- JGAS000006_L1[, c(1, 2, 3, 10,11,9)]
+
+
+# merge datasets
+logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$start_position <- logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high$start_position +1
+
+L1_hipsci_met_exp <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("chromosome_name", "start_position", "end_position"), all.x = TRUE),
+        list(logcounts_hipsci_lr_repeats_age_exp_filtered_full_length_L1_high, Ewing_2020_GRCh38_cancer_L1_celloseq_bed, Ewing_2020_GRCh38_tissue_L1_celloseq_bed, GSE57097_L1, GSE16256_L1_met, JGAS000006_L1))
+
+L1_hipsci_met <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("chromosome_name", "start_position", "end_position"), all.x = TRUE),
+        list(GSE16256_L1_met, Ewing_2020_GRCh38_cancer_L1_celloseq_bed, Ewing_2020_GRCh38_tissue_L1_celloseq_bed, JGAS000006_L1))
+
+rownames(L1_hipsci_met) <- L1_hipsci_met_exp$unique_name
+L1_hipsci_met <- L1_hipsci_met[,4:ncol(L1_hipsci_met)]
+```
+
+
+# mouse data
+
+Check for methylation data of L1Mds in mouse early development.
+
+# load in all the datasets
+```{r}
+
+logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md <- readRDS("~/logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md.rds")
+
+#load data
+mydir = "~/GSE97778/"
+myfiles = list.files(path=mydir, pattern="*L1Md.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+GSE97778_L1Md = Reduce(merge, counts_sr)
+GSE97778_L1Md <- GSE97778_L1Md[, c(1, 2, 3, 15, 8,12,10,9,13,11,14,4,5,6,7)]
+colnames(GSE97778_L1Md) <- c("chromosome_name", "start_position", "end_position","zygote", "early_2cell",  "late_2cell","4cell", "8cell", "morula", "ICM", "TE", "E6_5_Epi", "E6_5_Exe", "E7_5_Epi", "E7_5_Exe")
+
+
+mydir = "~/BrindAmour_2020/"
+myfiles = list.files(path=mydir, pattern="*L1Md.bed", full.names=TRUE)
+counts_sr = lapply(myfiles, function(x) read.table(x, stringsAsFactors=FALSE, col.names=c("chr", "start", "end", basename(x))))
+BrindAmour_2020_L1Md = Reduce(merge, counts_sr)
+colnames(BrindAmour_2020_L1Md) <- c("chromosome_name", "start_position", "end_position","BrindAmour_2020_2cell")
+BrindAmour_2020_L1Md$BrindAmour_2020_2cell <- as.numeric(BrindAmour_2020_L1Md$BrindAmour_2020_2cell)
+BrindAmour_2020_L1Md$BrindAmour_2020_2cell <- BrindAmour_2020_L1Md$BrindAmour_2020_2cell/100
+
+Schoepp_2020_L1Md <- read.delim("~/Schoepp_2020_L1.bed.sorted.bed_L1Md.bed", header =FALSE, stringsAsFactors = FALSE, sep="\t")
+colnames(Schoepp_2020_L1Md) <- c("chromosome_name", "start_position", "end_position","spermatogonia")
+Schoepp_2020_L1Md$spermatogonia <- as.numeric(Schoepp_2020_L1Md$spermatogonia)
+Schoepp_2020_L1Md$spermatogonia <- Schoepp_2020_L1Md$spermatogonia/100
+
+
+# collate data
+L1_2cell_met_exp <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("chromosome_name", "start_position", "end_position"), all.x = TRUE),
+        list(logcounts_2cell_lr_repeats_age_exp_filtered_full_length_high_L1Md, Schoepp_2020_L1Md, BrindAmour_2020_L1Md,GSE97778_L1Md ))
+
+L1_2cell_met <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("chromosome_name", "start_position", "end_position"), all.x = TRUE),
+        list(Schoepp_2020_L1Md, GSE97778_L1Md))
+
+rownames(L1_2cell_met) <- L1_2cell_met_exp$unique_name
+L1_2cell_met <- L1_2cell_met[,4:ncol(L1_2cell_met)]
+```
+
